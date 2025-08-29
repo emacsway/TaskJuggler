@@ -66,6 +66,7 @@ class TaskJuggler
     # initializes variables used during the scheduling process.
     def prepareScheduling
       @effort = 0
+      @stdev = 0
       initScoreboard if @property.leaf?
     end
 

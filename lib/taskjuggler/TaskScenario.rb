@@ -29,7 +29,7 @@ class TaskJuggler
       # have to check for existance each time we access them.
       %w( allocate assignedresources booking charge chargeset complete
           competitors criticalness depends duration
-          effort effortdone effortleft end forward gauge length
+          effort stdev effortdone effortleft end forward gauge length
           maxend maxstart minend minstart milestone pathcriticalness
           precedes priority projectionmode responsible
           scheduled shifts start status ).each do |attr|
@@ -1379,6 +1379,28 @@ class TaskJuggler
       query.string = query.scaleLoad(work)
     end
 
+    def query_stdev(query)
+      stdev = getEffectiveStandardDeviation(query.startIdx, query.endIdx, query.scopeProperty)
+      stdev = @project.convertToDailyLoad(stdev * @project['scheduleGranularity'])
+      query.sortable = query.numerical = stdev
+      query.string = query.scaleLoad(stdev)
+    end
+
+    def query_leftstdev2(query)
+      stdev = getEffectiveStandardDeviation(@project.dateToIdx(@project['now']), query.endIdx, query.scopeProperty)
+      stdev = @project.convertToDailyLoad(stdev * @project['scheduleGranularity'])
+      query.sortable = query.numerical = stdev
+      query.string = query.scaleLoad(stdev)
+    end
+
+    def query_leftstdev(query)
+      # TODO: Use a logic similar to effortleft instead?
+      stdev = getEffectiveLeftStandardDeviation(query.startIdx, query.endIdx, query.scopeProperty)
+      stdev = @project.convertToDailyLoad(stdev * @project['scheduleGranularity'])
+      query.sortable = query.numerical = stdev
+      query.string = query.scaleLoad(stdev)
+    end
+
     def query_followers(query)
       list = []
 
@@ -1615,6 +1637,75 @@ class TaskJuggler
           end
         end
         workLoad
+      end
+    end
+
+    def getEffectiveStandardDeviation(startIdx, endIdx, resource = nil)
+      # Make sure we have the real Resource and not a proxy.
+      resource = resource.ptn if resource
+      return 0.0 if @milestone || startIdx >= endIdx ||
+                    (resource && !@assignedresources.include?(resource))
+
+      @dCache.cached(self, :TaskScenarioEffectiveStandardDeviation, startIdx, endIdx,
+                     resource) do
+        stdev = 0.0
+        if @property.container?
+          stdev_list = []
+          @property.kids.each do |task|
+            stdev_list.append(
+              task.getEffectiveStandardDeviation(
+                @scenarioIdx, startIdx, endIdx, resource
+              )
+            )
+          end
+          stdev = Math.sqrt(stdev_list.sum(0) { |i| i**2 })
+        else
+          stdev = if @stdev.nil? then 0.0 else @stdev end
+          if @effort
+            effectiveWork = getEffectiveWork(startIdx, endIdx, resource)
+            effort = @project.convertToDailyLoad(@effort * @project['scheduleGranularity'])
+            stdev = stdev * effectiveWork / effort
+          elsif resource
+            stdev = stdev / resource['efficiency', @scenarioIdx]
+          end
+        end
+        stdev
+      end
+    end
+
+    def getEffectiveLeftStandardDeviation(startIdx, endIdx, resource = nil)
+      # Make sure we have the real Resource and not a proxy.
+      resource = resource.ptn if resource
+      return 0.0 if @milestone || startIdx >= endIdx ||
+                    (resource && !@assignedresources.include?(resource))
+
+      @dCache.cached(self, :TaskScenarioEffectiveLeftStandardDeviation, startIdx, endIdx,
+                     resource) do
+        stdev = 0.0
+        if @property.container?
+          stdev_list = []
+          @property.kids.each do |task|
+            stdev_list.append(
+              task.getEffectiveLeftStandardDeviation(
+                @scenarioIdx, startIdx, endIdx, resource
+              )
+            )
+          end
+          stdev = Math.sqrt(stdev_list.sum(0) { |i| i**2 })
+        else
+          stdev = if @stdev.nil? then 0.0 else @stdev end
+          if @effort
+            effectiveWork = getEffectiveWork(startIdx, endIdx, resource)
+            effort = @project.convertToDailyLoad(@effort * @project['scheduleGranularity'])
+            stdev = stdev * effectiveWork / effort
+          elsif resource
+            stdev = stdev / resource['efficiency', @scenarioIdx]
+          end
+          if @complete
+            stdev = stdev * (100 - @complete) / 100
+          end
+        end
+        stdev
       end
     end
 

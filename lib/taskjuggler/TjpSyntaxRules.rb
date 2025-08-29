@@ -3947,6 +3947,12 @@ EOT
     singlePattern('_effort')
     descr('The allocated effort during the reporting period')
 
+    singlePattern('_stdev')
+    descr('The standard deviation during the reporting period')
+
+    singlePattern('_leftstdev')
+    descr('The standard deviation during the reporting period for incomplete tasks')
+
     singlePattern('_effortdone')
     descr('The already completed effort as of now')
 
@@ -6404,6 +6410,22 @@ EOT
        )
     example('Durations')
     also(%w( duration length ))
+
+    pattern(%w( _stdev !workingDuration ), lambda {
+      if @val[1] < 0
+        error('stdev_zero', "Standard Deviation value must at least as large as the " +
+                             "timing resolution " +
+                             "(#{@project['scheduleGranularity'] / 60}min).",
+              @sourceFileInfo[1], @property)
+      end
+      checkContainer('stdev')
+      @property['stdev', @scenarioIdx] = @val[1]
+    })
+    doc('stdev', <<'EOT'
+Standard Deviation
+EOT
+       )
+    example('Durations')
 
     pattern(%w( _effortdone !workingDuration ), lambda {
       @property['effortdone', @scenarioIdx] = @val[1]
