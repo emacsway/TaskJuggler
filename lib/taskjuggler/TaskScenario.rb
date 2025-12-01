@@ -1350,7 +1350,7 @@ class TaskJuggler
                                              @project['scheduleGranularity'])
       else
         # For this query, we always override the query period.
-        effort = getEffectiveWork(@project.dateToIdx(@project['start'], false),
+        effort = getEffectiveWork(query.startIdx,
                                   @project.dateToIdx(@project['now']),
                                   query.scopeProperty)
       end
@@ -1365,7 +1365,7 @@ class TaskJuggler
       # For this query, we always override the query period.
       query.sortable = query.numerical = effort =
         getEffectiveWork(@project.dateToIdx(@project['now']),
-                         @project.dateToIdx(@project['end'], false),
+                         query.endIdx,
                          query.scopeProperty)
       query.string = query.scaleLoad(effort)
     end
