@@ -3951,7 +3951,10 @@ EOT
     descr('The standard deviation during the reporting period')
 
     singlePattern('_stdevleft')
-    descr('The standard deviation during the reporting period for incomplete tasks')
+    descr('The standard deviation during the reporting period for left tasks')
+
+    singlePattern('_stdevincomplete')
+    descr('The standard deviation during the reporting period for incomplete tasks (based on complete attribute of task)')
 
     singlePattern('_effortdone')
     descr('The already completed effort as of now')

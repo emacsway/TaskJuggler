@@ -1386,16 +1386,16 @@ class TaskJuggler
       query.string = query.scaleLoad(stdev)
     end
 
-    def query_stdevleft2(query)
+    def query_stdevleft(query)
       stdev = getEffectiveStandardDeviation(@project.dateToIdx(@project['now']), query.endIdx, query.scopeProperty)
       stdev = @project.convertToDailyLoad(stdev * @project['scheduleGranularity'])
       query.sortable = query.numerical = stdev
       query.string = query.scaleLoad(stdev)
     end
 
-    def query_stdevleft(query)
+    def query_stdevincomplete(query)
       # TODO: Use a logic similar to effortleft instead?
-      stdev = getEffectiveStandardDeviationLeft(query.startIdx, query.endIdx, query.scopeProperty)
+      stdev = getEffectiveStandardDeviationIncomplete(query.startIdx, query.endIdx, query.scopeProperty)
       stdev = @project.convertToDailyLoad(stdev * @project['scheduleGranularity'])
       query.sortable = query.numerical = stdev
       query.string = query.scaleLoad(stdev)
@@ -1673,20 +1673,20 @@ class TaskJuggler
       end
     end
 
-    def getEffectiveStandardDeviationLeft(startIdx, endIdx, resource = nil)
+    def getEffectiveStandardDeviationIncomplete(startIdx, endIdx, resource = nil)
       # Make sure we have the real Resource and not a proxy.
       resource = resource.ptn if resource
       return 0.0 if @milestone || startIdx >= endIdx ||
                     (resource && !@assignedresources.include?(resource))
 
-      @dCache.cached(self, :TaskScenarioEffectiveStandardDeviationLeft, startIdx, endIdx,
+      @dCache.cached(self, :TaskScenarioEffectiveStandardDeviationIncomplete, startIdx, endIdx,
                      resource) do
         stdev = 0.0
         if @property.container?
           stdev_list = []
           @property.kids.each do |task|
             stdev_list.append(
-              task.getEffectiveStandardDeviationLeft(
+              task.getEffectiveStandardDeviationIncomplete(
                 @scenarioIdx, startIdx, endIdx, resource
               )
             )
