@@ -49,7 +49,7 @@ class TaskJuggler
       'duration'          => [ 'Duration',             true,   :right, true ],
       'effort'            => [ 'Effort',               true,   :right, true ],
       'stdev'             => [ 'σ',                    true,   :right, true ],
-      'leftstdev'         => [ 'Left σ',               true,   :right, true ],
+      'stdevleft'         => [ 'σ Left',               true,   :right, true ],
       'effortdone'        => [ 'Effort Done',          true,   :right, true ],
       'effortleft'        => [ 'Effort Left',          true,   :right, true ],
       'freetime'          => [ 'Free Time',            true,   :right, true ],
