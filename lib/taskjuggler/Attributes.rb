@@ -288,6 +288,16 @@ class TaskJuggler
       get.join(', ')
     end
 
+    def to_rti(query = nil)
+      if query
+        out = get.map { |f| "<nowiki>#{f}</nowiki>" }
+        query.assignList(out)
+      else
+        rText = RichText.new(get.join(', '))
+        rText.generateIntermediateFormat
+      end
+    end
+
     def to_tjp
       "flags #{get.join(', ')}"
     end
