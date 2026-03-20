@@ -149,7 +149,7 @@ class TaskJuggler
       scenarioIdx = @timeSheet.scenarioIdx
       project = resource.project
       plannedWork = @task.getEffectiveWork(scenarioIdx, startIdx, endIdx,
-                                           resource)
+                                           resource).to_f
       # Convert the @work slots into a daily load.
       work = project.convertToDailyLoad(@work * project['scheduleGranularity'])
 
@@ -164,7 +164,7 @@ class TaskJuggler
         startIdx = endIdx
         endIdx = project.dateToIdx(@task['end', scenarioIdx])
         remainingWork = @task.getEffectiveWork(scenarioIdx, startIdx, endIdx,
-                                               resource)
+                                               resource).to_f
         # Convert the @remaining slots into a daily load.
         remaining = project.convertToDailyLoad(@remaining *
                                                project['scheduleGranularity'])
@@ -221,7 +221,7 @@ class TaskJuggler
       scenarioIdx = @timeSheet.scenarioIdx
       startIdx = project.dateToIdx(project['now'])
       endIdx = project.dateToIdx(@task['end', scenarioIdx])
-      @task.getEffectiveWork(scenarioIdx, startIdx, endIdx, resource)
+      @task.getEffectiveWork(scenarioIdx, startIdx, endIdx, resource).to_f
     end
 
     # The reported expected end of the task.

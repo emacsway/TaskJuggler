@@ -907,7 +907,7 @@ class TaskJuggler
           cell = newCell(query, line)
 
           # To increase readability show empty cells instead of 0.0 values.
-          cell.text = query.to_s if query.to_num != 0.0
+          cell.text = query.scaleLoad(query.to_num) if query.to_num != 0.0
         else
           raise "Unknown column content #{column.content}"
         end
@@ -985,14 +985,14 @@ class TaskJuggler
         query.endIdx = @project.dateToIdx(nextT)
         query.process
         workLoad = query.to_num
-        scaledWorkLoad = query.to_s
+        scaledWorkLoad = query.scaleLoad(query.to_num)
 
         if task
           # Get work load for the particular task.
           query.scopeProperty = task
           query.process
           workLoadTask = query.to_num
-          scaledWorkLoad = query.to_s
+          scaledWorkLoad = query.scaleLoad(query.to_num)
         else
           workLoadTask = 0.0
         end

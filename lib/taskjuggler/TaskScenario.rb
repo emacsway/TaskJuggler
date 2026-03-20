@@ -14,6 +14,7 @@
 
 require 'taskjuggler/ScenarioData'
 require 'taskjuggler/DataCache'
+require 'taskjuggler/EffortDistribution'
 
 class TaskJuggler
 
@@ -1348,14 +1349,21 @@ class TaskJuggler
       if @effortdone
         effort = @project.convertToDailyLoad(@effortdone *
                                              @project['scheduleGranularity'])
+        query.sortable = query.numerical = effort
+        query.string = query.scaleLoad(effort)
       else
         # For this query, we always override the query period.
-        effort = getEffectiveWork(query.startIdx,
-                                  @project.dateToIdx(@project['now']),
-                                  query.scopeProperty)
+        work = getEffectiveWork(query.startIdx,
+                                @project.dateToIdx(@project['now']),
+                                query.scopeProperty)
+        query.sortable = query.numerical = work.mean
+        if work.stddev > 0
+          query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                     query.scaleLoad(work.stddev)]
+        else
+          query.string = query.scaleLoad(work.mean)
+        end
       end
-      query.sortable = query.numerical = effort
-      query.string = query.scaleLoad(effort)
     end
 
     # The remaining (as of 'now') effort allocated for the task in the
@@ -1363,20 +1371,30 @@ class TaskJuggler
     # the effort allocated for this resource is taken into account.
     def query_effortleft(query)
       # For this query, we always override the query period.
-      query.sortable = query.numerical = effort =
-        getEffectiveWork(@project.dateToIdx(@project['now']),
-                         query.endIdx,
-                         query.scopeProperty)
-      query.string = query.scaleLoad(effort)
+      work = getEffectiveWork(@project.dateToIdx(@project['now']),
+                              query.endIdx,
+                              query.scopeProperty)
+      query.sortable = query.numerical = work.mean
+      if work.stddev > 0
+        query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                   query.scaleLoad(work.stddev)]
+      else
+        query.string = query.scaleLoad(work.mean)
+      end
     end
 
     # The effort allocated for the task in the specified interval. In case a
     # Resource is given as scope property only the effort allocated for this
     # resource is taken into account.
     def query_effort(query)
-      query.sortable = query.numerical = work =
-        getEffectiveWork(query.startIdx, query.endIdx, query.scopeProperty)
-      query.string = query.scaleLoad(work)
+      work = getEffectiveWork(query.startIdx, query.endIdx, query.scopeProperty)
+      query.sortable = query.numerical = work.mean
+      if work.stddev > 0
+        query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                   query.scaleLoad(work.stddev)]
+      else
+        query.string = query.scaleLoad(work.mean)
+      end
     end
 
     def query_stdev(query)
@@ -1614,12 +1632,12 @@ class TaskJuggler
     def getEffectiveWork(startIdx, endIdx, resource = nil)
       # Make sure we have the real Resource and not a proxy.
       resource = resource.ptn if resource
-      return 0.0 if @milestone || startIdx >= endIdx ||
+      return EffortDistribution.new(0.0, 0.0) if @milestone || startIdx >= endIdx ||
                     (resource && !@assignedresources.include?(resource))
 
       @dCache.cached(self, :TaskScenarioEffectiveWork, startIdx, endIdx,
                      resource) do
-        workLoad = 0.0
+        workLoad = EffortDistribution.new(0.0, 0.0)
         if @property.container?
           @property.kids.each do |task|
             workLoad += task.getEffectiveWork(@scenarioIdx, startIdx, endIdx,
@@ -1630,10 +1648,23 @@ class TaskJuggler
             workLoad += resource.getEffectiveWork(@scenarioIdx, startIdx,
                                                   endIdx, @property)
           else
+            # Multiple resources on the same task share correlated uncertainty.
+            # Sum means from resources, but compute stddev at the task level
+            # to avoid incorrect Pythagorean sum of correlated contributions.
+            workMean = 0.0
             @assignedresources.each do |r|
-              workLoad += r.getEffectiveWork(@scenarioIdx, startIdx, endIdx,
-                                             @property)
+              workMean += r.getEffectiveWork(@scenarioIdx, startIdx, endIdx,
+                                             @property).mean
             end
+            workStddev = 0.0
+            if @stdev && @stdev > 0 && @effort && @effort > 0
+              stdevDaily = @project.convertToDailyLoad(
+                @stdev * @project['scheduleGranularity'])
+              effortDaily = @project.convertToDailyLoad(
+                @effort * @project['scheduleGranularity'])
+              workStddev = stdevDaily * workMean / effortDaily if effortDaily > 0
+            end
+            workLoad = EffortDistribution.new(workMean, workStddev)
           end
         end
         workLoad
@@ -1662,7 +1693,7 @@ class TaskJuggler
         else
           stdev = if @stdev.nil? then 0.0 else @stdev end
           if @effort
-            effectiveWork = getEffectiveWork(startIdx, endIdx, resource)
+            effectiveWork = getEffectiveWork(startIdx, endIdx, resource).mean
             effort = @project.convertToDailyLoad(@effort * @project['scheduleGranularity'])
             stdev = stdev * effectiveWork / effort
           elsif resource
@@ -1695,7 +1726,7 @@ class TaskJuggler
         else
           stdev = if @stdev.nil? then 0.0 else @stdev end
           if @effort
-            effectiveWork = getEffectiveWork(startIdx, endIdx, resource)
+            effectiveWork = getEffectiveWork(startIdx, endIdx, resource).mean
             effort = @project.convertToDailyLoad(@effort * @project['scheduleGranularity'])
             stdev = stdev * effectiveWork / effort
           elsif resource
@@ -2551,7 +2582,7 @@ class TaskJuggler
           # Effort based leaf tasks. The completion degree is the percentage
           # of effort that has been done already.
           done = getEffectiveWork(@project.dateToIdx(@start, false),
-                                  @project.dateToIdx(@project['now']))
+                                  @project.dateToIdx(@project['now'])).mean
           total = @project.convertToDailyLoad(
             @effort * @project['scheduleGranularity'])
           completion = done / total * 100.0

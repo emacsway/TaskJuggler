@@ -13,6 +13,7 @@
 #
 
 require 'taskjuggler/ScenarioData'
+require 'taskjuggler/EffortDistribution'
 
 class TaskJuggler
 
@@ -356,9 +357,14 @@ class TaskJuggler
     # Task is given as scope property only the effort allocated to this Task is
     # taken into account.
     def query_effort(query)
-      query.sortable = query.numerical = effort =
-        getEffectiveWork(query.startIdx, query.endIdx, query.scopeProperty)
-      query.string = query.scaleLoad(effort)
+      work = getEffectiveWork(query.startIdx, query.endIdx, query.scopeProperty)
+      query.sortable = query.numerical = work.mean
+      if work.stddev > 0
+        query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                   query.scaleLoad(work.stddev)]
+      else
+        query.string = query.scaleLoad(work.mean)
+      end
     end
 
     # The completed (as of 'now') effort allocated for the resource in the
@@ -366,11 +372,16 @@ class TaskJuggler
     # the effort allocated for this Task is taken into account.
     def query_effortdone(query)
       # For this query, we always override the query period.
-      query.sortable = query.numerical = effort =
-        getEffectiveWork(query.startIdx,
-                         @project.dateToIdx(@project['now']),
-                         query.scopeProperty)
-      query.string = query.scaleLoad(effort)
+      work = getEffectiveWork(query.startIdx,
+                              @project.dateToIdx(@project['now']),
+                              query.scopeProperty)
+      query.sortable = query.numerical = work.mean
+      if work.stddev > 0
+        query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                   query.scaleLoad(work.stddev)]
+      else
+        query.string = query.scaleLoad(work.mean)
+      end
     end
 
 
@@ -379,11 +390,16 @@ class TaskJuggler
     # the effort allocated for this Task is taken into account.
     def query_effortleft(query)
       # For this query, we always override the query period.
-      query.sortable = query.numerical = effort =
-        getEffectiveWork(@project.dateToIdx(@project['now']),
-                         query.endIdx,
-                         query.scopeProperty)
-      query.string = query.scaleLoad(effort)
+      work = getEffectiveWork(@project.dateToIdx(@project['now']),
+                              query.endIdx,
+                              query.scopeProperty)
+      query.sortable = query.numerical = work.mean
+      if work.stddev > 0
+        query.string = "%s±%s" % [query.scaleLoad(work.mean),
+                                   query.scaleLoad(work.stddev)]
+      else
+        query.string = query.scaleLoad(work.mean)
+      end
     end
 
     # The unallocated work time of the Resource during the specified interval.
@@ -549,26 +565,68 @@ class TaskJuggler
       task = task.ptn if task
       # There can't be any effective work if the start is after the end or the
       # todo list doesn't contain the specified task.
-      return 0.0 if startIdx >= endIdx || (task && !@duties.include?(task))
+      return EffortDistribution.new(0.0, 0.0) if startIdx >= endIdx ||
+            (task && !@duties.include?(task))
       # Temporary workaround until @duties is fixed again.
 
       # The unique key we use to address the result in the cache.
       @dCache.cached(self, :ResourceScenarioGetEffectiveWork, startIdx, endIdx,
                      task) do
-        work = 0.0
         if @property.container?
+          work = EffortDistribution.new(0.0, 0.0)
           @property.kids.each do |resource|
             work += resource.getEffectiveWork(@scenarioIdx, startIdx, endIdx,
                                               task)
           end
+          work
         else
+          workMean = 0.0
           unless @scoreboard.nil?
-            work = @project.convertToDailyLoad(
-                     getAllocatedSlots(startIdx, endIdx, task) *
-                     @project['scheduleGranularity']) * @efficiency
+            workMean = @project.convertToDailyLoad(
+                         getAllocatedSlots(startIdx, endIdx, task) *
+                         @project['scheduleGranularity']) * @efficiency
           end
+          workStddev = 0.0
+          if workMean > 0
+            if task
+              # Single task scope: scale task's stdev proportionally.
+              # task['stdev'] is in time slots, convert to man-days.
+              taskStdev = task['stdev', @scenarioIdx]
+              taskEffort = task['effort', @scenarioIdx]
+              if taskStdev && taskStdev > 0 && taskEffort && taskEffort > 0
+                taskStdevDaily = @project.convertToDailyLoad(
+                  taskStdev * @project['scheduleGranularity'])
+                totalEffort = @project.convertToDailyLoad(
+                  taskEffort * @project['scheduleGranularity'])
+                workStddev = taskStdevDaily * workMean / totalEffort if totalEffort > 0
+              end
+            else
+              # No task scope: combine stddevs from all duties.
+              # duty['stdev'] is in time slots, convert to man-days.
+              stdev_list = []
+              @duties.each do |duty|
+                next unless duty.leaf?
+                ts = duty['stdev', @scenarioIdx]
+                next unless ts && ts > 0
+                te = duty['effort', @scenarioIdx]
+                next unless te && te > 0
+                tsDaily = @project.convertToDailyLoad(
+                  ts * @project['scheduleGranularity'])
+                totalEffort = @project.convertToDailyLoad(
+                  te * @project['scheduleGranularity'])
+                next unless totalEffort > 0
+                taskWork = @project.convertToDailyLoad(
+                  getAllocatedSlots(startIdx, endIdx, duty) *
+                  @project['scheduleGranularity']) * @efficiency
+                stdev_list << tsDaily * taskWork / totalEffort if taskWork > 0
+              end
+              unless stdev_list.empty?
+                workStddev = Math.sqrt(stdev_list.sum(0) { |s| s**2 })
+              end
+            end
+          end
+          EffortDistribution.new(workMean, workStddev)
         end
-        work
       end
     end
 

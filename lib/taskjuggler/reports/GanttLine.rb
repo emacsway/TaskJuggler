@@ -187,12 +187,12 @@ class TaskJuggler
             endIdx = project.dateToIdx(endDate)
 
             overallWork = scopeProperty.getEffectiveWork(@query.scenarioIdx,
-                                                         startIdx, endIdx) +
+                                                         startIdx, endIdx).to_f +
                           scopeProperty.getEffectiveFreeWork(@query.scenarioIdx,
                                                              startIdx, endIdx)
             workThisTask = property.getEffectiveWork(@query.scenarioIdx,
                                                       startIdx, endIdx,
-                                                      scopeProperty)
+                                                      scopeProperty).to_f
             # If all values are 0 we make sure we show an empty frame.
             if overallWork == 0 && workThisTask == 0
               values = [ 0, 1 ]
@@ -310,9 +310,9 @@ class TaskJuggler
 
           taskWork = property.getEffectiveWork(@query.scenarioIdx,
                                                startIdx, endIdx,
-                                               scopeProperty)
+                                               scopeProperty).to_f
           overallWork = property.getEffectiveWork(@query.scenarioIdx,
-                                                  startIdx, endIdx)
+                                                  startIdx, endIdx).to_f
           freeWork = property.getEffectiveFreeWork(@query.scenarioIdx,
                                                    startIdx, endIdx)
           values = [ taskWork, overallWork - taskWork, freeWork ]
@@ -322,7 +322,7 @@ class TaskJuggler
 
           values = []
           values << property.getEffectiveWork(@query.scenarioIdx,
-                                              startIdx, endIdx)
+                                              startIdx, endIdx).to_f
           values << property.getEffectiveFreeWork(@query.scenarioIdx,
                                                   startIdx, endIdx)
         end

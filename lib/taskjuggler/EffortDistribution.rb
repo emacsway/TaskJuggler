@@ -125,6 +125,12 @@ class TaskJuggler
       EffortDistribution.new(@mean / scalar, @stddev / scalar.abs)
     end
 
+    # Allow Float/Integer arithmetic with EffortDistribution on the left side
+    # e.g. 1.0 + EffortDistribution.new(2.0, 0.5)
+    def coerce(other)
+      [EffortDistribution.new(other.to_f, 0.0), self]
+    end
+
   end
 
 end
