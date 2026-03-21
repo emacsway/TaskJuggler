@@ -1,5 +1,6 @@
 import { Component, computed, signal } from '@angular/core';
 import { SlicePipe } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
 import { GanttTask } from '../../core/models';
@@ -20,13 +21,22 @@ const ZOOM_LEVELS = [
 @Component({
   selector: 'app-gantt-chart',
   standalone: true,
-  imports: [SlicePipe],
+  imports: [SlicePipe, FormsModule],
   template: `
     <div class="gantt-container">
       @if (ganttData(); as data) {
         <!-- Zoom toolbar -->
         <div class="gantt-toolbar">
-          <span class="zoom-label">Zoom:</span>
+          @if (project.scenarios().length > 1) {
+            <span class="toolbar-label">Scenario:</span>
+            <select class="toolbar-select" [ngModel]="ui.activeScenario()" (ngModelChange)="switchScenario($event)">
+              @for (s of project.scenarios(); track s.id) {
+                <option [value]="s.id">{{ s.name }}</option>
+              }
+            </select>
+            <span class="toolbar-sep"></span>
+          }
+          <span class="toolbar-label">Zoom:</span>
           @for (z of zoomLevels; track z.label; let i = $index) {
             <button
               class="zoom-btn"
@@ -125,6 +135,13 @@ const ZOOM_LEVELS = [
       border-bottom: 1px solid var(--border-color);
       flex-shrink: 0;
     }
+    .toolbar-label { font-size: 11px; color: var(--text-secondary); }
+    .toolbar-select {
+      padding: 2px 6px; background: var(--bg-primary); border: 1px solid var(--border-color);
+      color: var(--text-primary); border-radius: 3px; font-size: 11px;
+      &:focus { outline: 1px solid var(--accent-color); }
+    }
+    .toolbar-sep { width: 1px; height: 16px; background: var(--border-color); margin: 0 4px; }
     .zoom-label { font-size: 11px; color: var(--text-secondary); margin-right: 4px; }
     .zoom-btn {
       padding: 2px 8px; font-size: 11px;
@@ -206,6 +223,11 @@ export class GanttChartComponent {
     public project: ProjectStateService,
     public ui: UiStateService
   ) {}
+
+  switchScenario(scenarioId: string): void {
+    this.ui.activeScenario.set(scenarioId);
+    this.project.loadProjectData(scenarioId);
+  }
 
   selectTask(taskId: string): void {
     this.ui.selectedTaskId.set(taskId);
