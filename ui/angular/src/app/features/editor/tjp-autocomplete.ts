@@ -5,7 +5,10 @@ import { Extension } from '@codemirror/state';
  * Creates a CodeMirror autocomplete extension that suggests TJP keywords,
  * attributes, and project-specific task/resource IDs.
  */
-export function tjpAutocomplete(getIds: () => { tasks: string[]; resources: string[] }): Extension {
+export function tjpAutocomplete(
+  getIds: () => { tasks: string[]; resources: string[] },
+  onPertRequest?: () => void
+): Extension {
   return autocompletion({
     override: [
       (ctx: CompletionContext): CompletionResult | null => {
@@ -13,7 +16,7 @@ export function tjpAutocomplete(getIds: () => { tasks: string[]; resources: stri
         if (!word || (word.from === word.to && !ctx.explicit)) return null;
 
         const ids = getIds();
-        const options = [
+        const options: any[] = [
           // Keywords
           ...KEYWORDS.map(label => ({ label, type: 'keyword' as const })),
           // Attributes
@@ -23,6 +26,22 @@ export function tjpAutocomplete(getIds: () => { tasks: string[]; resources: stri
           // Resource IDs
           ...ids.resources.map(label => ({ label, type: 'variable' as const, detail: 'resource' })),
         ];
+
+        // PERT calculator shortcut
+        if (onPertRequest) {
+          options.push({
+            label: 'effort',
+            displayLabel: 'effort (PERT calculator)',
+            type: 'keyword',
+            detail: 'Ctrl+Shift+E',
+            boost: 10,
+            apply: (view: any, _completion: any, from: number, to: number) => {
+              // Remove the typed prefix (e.g. "ef") instead of inserting "effort"
+              view.dispatch({ changes: { from, to, insert: '' } });
+              onPertRequest();
+            },
+          });
+        }
 
         return { from: word.from, options, validFor: /^[\w.]*$/ };
       },

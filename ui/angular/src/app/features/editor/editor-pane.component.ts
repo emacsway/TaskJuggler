@@ -17,10 +17,12 @@ import { linter, setDiagnostics } from '@codemirror/lint';
 import { tjpLanguage } from './tjp-language';
 import { tjpAutocomplete } from './tjp-autocomplete';
 import { mapDiagnostics } from './tjp-linter';
+import { PertCalculatorComponent, PertResult } from './pert-calculator.component';
 
 @Component({
   selector: 'app-editor-pane',
   standalone: true,
+  imports: [PertCalculatorComponent],
   template: `
     <div class="editor-container">
       <div class="editor-tabs">
@@ -46,6 +48,13 @@ import { mapDiagnostics } from './tjp-linter';
         <div class="no-file">Open a file from the Files panel</div>
       }
     </div>
+
+    @if (showPert) {
+      <app-pert-calculator
+        (close)="showPert = false"
+        (insertResult)="onPertInsert($event)"
+      ></app-pert-calculator>
+    }
   `,
   styles: [`
     .editor-container {
@@ -114,6 +123,7 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
 
   private editorView: EditorView | null = null;
   private currentPath: string | null = null;
+  showPert = false;
 
   constructor(
     public editorState: EditorStateService,
@@ -185,6 +195,38 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  onPertInsert(result: PertResult): void {
+    this.showPert = false;
+    if (!this.editorView) return;
+
+    const view = this.editorView;
+    const pos = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(pos);
+
+    // Detect indentation of current line
+    const indent = line.text.match(/^(\s*)/)?.[1] || '    ';
+
+    // Check if cursor is on a line that already has "effort"
+    const hasEffort = /^\s*effort\b/.test(line.text);
+
+    let text: string;
+    if (hasEffort) {
+      // Replace current line and add stdev after
+      const replacement = `${indent}effort ${result.effort}${result.unit}\n${indent}stdev ${result.stdev}${result.unit}`;
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: replacement },
+      });
+    } else {
+      // Insert at cursor position
+      text = `effort ${result.effort}${result.unit}\n${indent}stdev ${result.stdev}${result.unit}`;
+      view.dispatch({
+        changes: { from: pos, insert: text },
+      });
+    }
+
+    view.focus();
+  }
+
   private scrollToLine(line: number): void {
     if (!this.editorView) return;
     const doc = this.editorView.state.doc;
@@ -215,12 +257,19 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
             key: 'Mod-s',
             run: () => { this.saveAll(); return true; },
           },
+          {
+            key: 'Ctrl-Shift-e',
+            run: () => { this.showPert = true; return true; },
+          },
         ]),
         tjpLanguage(),
-        tjpAutocomplete(() => ({
-          tasks: this.projectState.tasks().map(t => t.id),
-          resources: this.projectState.resources().map(r => r.id),
-        })),
+        tjpAutocomplete(
+          () => ({
+            tasks: this.projectState.tasks().map(t => t.id),
+            resources: this.projectState.resources().map(r => r.id),
+          }),
+          () => { this.showPert = true; }
+        ),
         linter(() => []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
