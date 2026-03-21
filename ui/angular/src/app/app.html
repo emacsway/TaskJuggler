@@ -1,4 +1,4 @@
-<div class="app-container">
+<div class="app-container" [class.resizing]="resizing">
   <app-toolbar class="app-toolbar"></app-toolbar>
 
   <div class="app-main">
@@ -19,7 +19,7 @@
       </div>
     </div>
 
-    <div class="resize-handle vertical"></div>
+    <div class="resize-handle vertical" (mousedown)="startResizeLeft($event)"></div>
 
     <div class="right-panel">
       <div class="panel-tabs">
@@ -38,7 +38,7 @@
   </div>
 
   @if (ui.messagePanelVisible()) {
-    <div class="resize-handle horizontal"></div>
+    <div class="resize-handle horizontal" (mousedown)="startResizeBottom($event)"></div>
     <app-message-panel class="message-panel" [style.height.px]="ui.messagePanelHeight()"></app-message-panel>
   }
 </div>

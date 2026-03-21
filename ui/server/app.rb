@@ -5,9 +5,13 @@ require 'securerandom'
 require 'json'
 
 $LOAD_PATH.unshift File.expand_path('../../lib', __dir__)
+require 'taskjuggler/Tj3Config'
 require 'taskjuggler/TaskJuggler'
 require 'taskjuggler/MessageHandler'
 require 'taskjuggler/Query'
+
+AppConfig.new
+AppConfig.appName = 'tj3ui'
 
 require_relative 'lib/tj3_session'
 require_relative 'lib/tj3_serializer'
@@ -26,8 +30,16 @@ class Tj3App < Sinatra::Base
     set :show_exceptions, false
   end
 
+  # Disable Sinatra's built-in static file / format extension handling
+  disable :static
+  set :provide, false if respond_to?(:provide)
+
   before '/api/*' do
     content_type :json
+    # Redirect misrouted file requests (e.g. /sessions/:id/resources.tji -> /sessions/:id/files/resources.tji)
+    if request.path_info =~ %r{/api/sessions/[^/]+/(?!files/).*\.(tjp|tji)$}
+      $stderr.puts "WARN: Possible misrouted file request: #{request.path_info}"
+    end
   end
 
   helpers do
@@ -57,11 +69,19 @@ class Tj3App < Sinatra::Base
     data = request_json
     project_dir = data['projectDir']
     halt 400, json(error: 'projectDir is required') unless project_dir
+
+    # If a file path was given, use its directory
+    master_file = nil
+    if File.file?(project_dir)
+      master_file = File.basename(project_dir)
+      project_dir = File.dirname(project_dir)
+    end
+
     halt 400, json(error: "Directory not found: #{project_dir}") unless File.directory?(project_dir)
 
     id = SecureRandom.hex(8)
     sessions[id] = Tj3Session.new(id, project_dir)
-    json(id: id, state: 'empty', projectDir: project_dir)
+    json(id: id, state: 'empty', projectDir: project_dir, masterFile: master_file)
   end
 
   # Get session state
@@ -89,7 +109,17 @@ class Tj3App < Sinatra::Base
     json session.list_files
   end
 
-  # Read file content
+  # Read file content (supports ?path= query param for absolute paths)
+  get '/api/sessions/:id/file' do
+    session = find_session!(params[:id])
+    path = params[:path]
+    halt 400, json(error: 'path query param is required') unless path
+    content = session.read_file(path)
+    halt 404, json(error: "File not found: #{path}") if content.nil?
+    json(path: path, content: content)
+  end
+
+  # Legacy: read file via URL path (for relative paths only)
   get '/api/sessions/:id/files/*' do
     session = find_session!(params[:id])
     path = params['splat'].join('/')
@@ -98,7 +128,17 @@ class Tj3App < Sinatra::Base
     json(path: path, content: content)
   end
 
-  # Write/update file content
+  # Write/update file content (supports ?path= query param)
+  put '/api/sessions/:id/file' do
+    session = find_session!(params[:id])
+    path = params[:path]
+    data = request_json
+    halt 400, json(error: 'path query param is required') unless path
+    halt 400, json(error: 'content is required') unless data['content']
+    session.write_file(path, data['content'])
+    json(path: path, ok: true)
+  end
+
   put '/api/sessions/:id/files/*' do
     session = find_session!(params[:id])
     path = params['splat'].join('/')
@@ -183,8 +223,10 @@ class Tj3App < Sinatra::Base
     json Tj3Serializer.tasks(session.project, scenario_idx)
   end
 
-  # Single task
-  get '/api/sessions/:id/tasks/:task_id' do
+  # Single task (task_id may contain dots like "project.phase.task")
+  get %r{/api/sessions/([^/]+)/tasks/([^/]+)} do
+    params[:id] = params['captures'][0]
+    params[:task_id] = params['captures'][1]
     session = find_session!(params[:id])
     halt 409, json(error: 'Project not scheduled yet') unless session.scheduled?
     scenario_idx = resolve_scenario(session.project, params[:scenario] || 0)
@@ -201,8 +243,10 @@ class Tj3App < Sinatra::Base
     json Tj3Serializer.resources(session.project, scenario_idx)
   end
 
-  # Single resource
-  get '/api/sessions/:id/resources/:res_id' do
+  # Single resource (res_id may contain dots)
+  get %r{/api/sessions/([^/]+)/resources/([^/]+)} do
+    params[:id] = params['captures'][0]
+    params[:res_id] = params['captures'][1]
     session = find_session!(params[:id])
     halt 409, json(error: 'Project not scheduled yet') unless session.scheduled?
     scenario_idx = resolve_scenario(session.project, params[:scenario] || 0)
@@ -251,8 +295,10 @@ class Tj3App < Sinatra::Base
     json Tj3Serializer.reports(session.project)
   end
 
-  # Generate report
-  post '/api/sessions/:id/reports/:report_id/generate' do
+  # Generate report (report_id may contain dots like "frame.index.fact")
+  post %r{/api/sessions/([^/]+)/reports/([^/]+)/generate} do
+    params[:id] = params['captures'][0]
+    params[:report_id] = params['captures'][1]
     session = find_session!(params[:id])
     halt 409, json(error: 'Project not scheduled yet') unless session.scheduled?
     data = request_json
@@ -268,7 +314,8 @@ class Tj3App < Sinatra::Base
   end
 
   not_found do
-    json(error: 'Not found')
+    $stderr.puts "404 Not Found: #{request.request_method} #{request.path_info}"
+    json(error: "Not found: #{request.request_method} #{request.path_info}")
   end
 
   private

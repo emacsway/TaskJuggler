@@ -1,5 +1,14 @@
 class Tj3Serializer
 
+  # Set project directory for converting absolute paths to relative
+  def self.project_dir=(dir)
+    @project_dir = dir&.chomp('/')
+  end
+
+  def self.project_dir
+    @project_dir
+  end
+
   def self.project_meta(project)
     scenarios = []
     project.scenarios.each do |s|
@@ -109,7 +118,7 @@ class Tj3Serializer
       precedes: serialize_dependencies(safe_scenario_attr(task, 'precedes', scenario_idx)),
       flags: safe_get(task, 'flags') || [],
       note: safe_get(task, 'note')&.to_s,
-      sourceFile: task.sourceFileInfo&.fileName,
+      sourceFile: relative_source_file(task),
       sourceLine: task.sourceFileInfo&.lineNo
     }
   end
@@ -125,7 +134,7 @@ class Tj3Serializer
       email: safe_get(resource, 'email'),
       efficiency: safe_scenario_attr(resource, 'efficiency', scenario_idx),
       rate: safe_scenario_attr(resource, 'rate', scenario_idx),
-      sourceFile: resource.sourceFileInfo&.fileName,
+      sourceFile: relative_source_file(resource),
       sourceLine: resource.sourceFileInfo&.lineNo
     }
   end
@@ -138,7 +147,7 @@ class Tj3Serializer
       children: account.children.select { |c| c.is_a?(TaskJuggler::Account) }.map(&:fullId),
       level: account.level,
       isLeaf: account.leaf?,
-      sourceFile: account.sourceFileInfo&.fileName,
+      sourceFile: relative_source_file(account),
       sourceLine: account.sourceFileInfo&.lineNo
     }
   end
@@ -200,5 +209,13 @@ class Tj3Serializer
   def self.format_time(time)
     return nil unless time
     time.respond_to?(:to_s) ? time.to_s('%Y-%m-%dT%H:%M:%S') : time.to_s
+  end
+
+  def self.relative_source_file(property)
+    abs = property.sourceFileInfo&.fileName
+    return nil unless abs
+
+    # Always return the absolute path — the backend file API accepts both
+    abs
   end
 end

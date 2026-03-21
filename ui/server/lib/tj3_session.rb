@@ -36,13 +36,21 @@ class Tj3Session
   # ── File operations ───────────────────────────────────────────
 
   def list_files
+    # Scan project directory
     tjp_files = Dir.glob(File.join(@project_dir, '**', '*.tjp'))
     tji_files = Dir.glob(File.join(@project_dir, '**', '*.tji'))
+    all_files = (tjp_files + tji_files).to_set
 
-    (tjp_files + tji_files).map do |f|
-      rel = relative_path(f)
+    # After parse, also include files the engine discovered (may be outside project dir)
+    if @project
+      @project.sourceFiles.each do |abs|
+        all_files.add(abs) if abs.is_a?(String) && File.exist?(abs)
+      end rescue nil
+    end
+
+    all_files.map do |f|
       {
-        path: rel,
+        path: f,  # absolute path — backend file API handles both
         isMaster: File.extname(f) == '.tjp',
         size: File.size(f),
         modified: File.mtime(f).iso8601
@@ -51,7 +59,12 @@ class Tj3Session
   end
 
   def read_file(path)
-    full = File.join(@project_dir, path)
+    # Accept both absolute paths and paths relative to project dir
+    full = if path.start_with?('/')
+             path
+           else
+             File.join(@project_dir, path)
+           end
     return nil unless File.exist?(full)
     File.read(full, encoding: 'UTF-8')
   end
@@ -82,6 +95,7 @@ class Tj3Session
     if success
       @project = @tj.project
       @state = :parsed
+      Tj3Serializer.project_dir = @project_dir
     else
       @state = :error
     end
@@ -173,18 +187,22 @@ class Tj3Session
     report = @project.report(report_id)
     return { ok: false, error: "Report '#{report_id}' not found" } unless report
 
-    # Set output to a temp directory
     output_dir = File.join(@project_dir, '.tj3ui_reports')
     FileUtils.mkdir_p(output_dir)
-    @project['outputdir'] = output_dir
+    @project.outputDir = output_dir + '/'
 
     success = @tj.generateReport(report_id, false, [format.to_sym])
 
     if success
-      # Find generated file
       report_files = Dir.glob(File.join(output_dir, '**', '*'))
       html_file = report_files.find { |f| f.end_with?(".#{format}") }
       content = html_file ? File.read(html_file, encoding: 'UTF-8') : nil
+
+      # Inline CSS: replace <link> to external CSS with embedded <style>
+      if content && format == 'html'
+        content = inline_css(content)
+      end
+
       { ok: true, reportId: report_id, format: format, content: content }
     else
       { ok: false, error: 'Report generation failed', messages: MessageCollector.collect }
@@ -201,5 +219,22 @@ class Tj3Session
     query.to_num
   rescue
     nil
+  end
+
+  # Replace <link rel="stylesheet" href="...tjreport.css"> with inline <style>
+  def inline_css(html)
+    # TJ3 root is 3 levels up from ui/server/lib/
+    tj3_root = File.expand_path('../../..', File.dirname(__FILE__))
+    css_path = File.join(tj3_root, 'data', 'css', 'tjreport.css')
+
+    unless File.exist?(css_path)
+      # Fallback: look in the report output directory
+      css_path = File.join(@project_dir, '.tj3ui_reports', 'css', 'tjreport.css')
+    end
+
+    return html unless File.exist?(css_path)
+
+    css_content = File.read(css_path, encoding: 'UTF-8')
+    html.sub(/<link[^>]*tjreport\.css[^>]*>/, "<style>\n#{css_content}\n</style>")
   end
 end

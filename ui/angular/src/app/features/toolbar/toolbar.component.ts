@@ -124,14 +124,23 @@ export class ToolbarComponent {
   async openProject(): Promise<void> {
     if (!this.projectDir) return;
     await this.project.openProject(this.projectDir);
+    // Auto parse & schedule after opening
+    await this.parseAndSchedule();
   }
 
   async parseAndSchedule(): Promise<void> {
-    const files = this.project.projectFiles();
-    const master = files.find((f) => f.isMaster);
-    if (!master) return;
+    const master = this.project.masterFile();
+    if (!master) {
+      const files = this.project.projectFiles();
+      const masterFile = files.find((f) => f.isMaster);
+      if (!masterFile) return;
+      this.project.masterFile.set(masterFile.path);
+    }
 
-    const parseResult = await this.project.parse(master.path);
+    const masterPath = this.project.masterFile();
+    if (!masterPath) return;
+
+    const parseResult = await this.project.parse(masterPath);
     if (parseResult.success) {
       await this.project.schedule();
     }

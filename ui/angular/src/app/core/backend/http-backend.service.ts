@@ -54,12 +54,16 @@ export class HttpBackendService extends TjBackend {
 
   readFile(sessionId: string, path: string): Observable<string> {
     return this.http
-      .get<{ path: string; content: string }>(`${this.baseUrl}/sessions/${sessionId}/files/${path}`)
+      .get<{ path: string; content: string }>(`${this.baseUrl}/sessions/${sessionId}/file`, {
+        params: { path },
+      })
       .pipe(map((r) => r.content));
   }
 
   writeFile(sessionId: string, path: string, content: string): Observable<void> {
-    return this.http.put<void>(`${this.baseUrl}/sessions/${sessionId}/files/${path}`, { content });
+    return this.http.put<void>(`${this.baseUrl}/sessions/${sessionId}/file`, { content }, {
+      params: { path },
+    });
   }
 
   createFile(sessionId: string, path: string, content: string): Observable<void> {

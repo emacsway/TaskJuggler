@@ -7,18 +7,21 @@ import {
   effect,
 } from '@angular/core';
 import { EditorStateService } from '../../core/state/editor-state.service';
+import { ProjectStateService } from '../../core/state/project-state.service';
+import { TjBackend } from '../../core/backend/backend.interface';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
+import { linter, setDiagnostics } from '@codemirror/lint';
 import { tjpLanguage } from './tjp-language';
+import { mapDiagnostics } from './tjp-linter';
 
 @Component({
   selector: 'app-editor-pane',
   standalone: true,
   template: `
     <div class="editor-container">
-      <!-- Tabs -->
       <div class="editor-tabs">
         @for (tab of editorState.tabs(); track tab.path) {
           <div
@@ -27,13 +30,15 @@ import { tjpLanguage } from './tjp-language';
             (click)="editorState.activeTabPath.set(tab.path)"
           >
             <span class="tab-name">{{ fileName(tab.path) }}</span>
-            @if (tab.dirty) { <span class="tab-dirty">*</span> }
-            <span class="tab-close" (click)="closeTab($event, tab.path)">x</span>
+            @if (tab.dirty) { <span class="tab-dirty">&bull;</span> }
+            <span class="tab-close" (click)="closeTab($event, tab.path)">&times;</span>
           </div>
+        }
+        @if (editorState.dirtyFiles().length > 0) {
+          <button class="save-btn" (click)="saveAll()">Save All</button>
         }
       </div>
 
-      <!-- Editor area -->
       <div class="editor-area" #editorHost></div>
 
       @if (!editorState.activeTab()) {
@@ -53,6 +58,7 @@ import { tjpLanguage } from './tjp-language';
       background: var(--bg-primary);
       border-bottom: 1px solid var(--border-color);
       overflow-x: auto;
+      align-items: center;
     }
     .editor-tab {
       display: flex;
@@ -70,18 +76,28 @@ import { tjpLanguage } from './tjp-language';
         color: var(--text-primary);
       }
     }
-    .tab-dirty { color: var(--warning-color); }
+    .tab-dirty { color: var(--warning-color); font-size: 16px; line-height: 1; }
     .tab-close {
       margin-left: 4px;
-      opacity: 0.5;
+      opacity: 0.4;
+      font-size: 14px;
       &:hover { opacity: 1; }
+    }
+    .save-btn {
+      margin-left: auto;
+      margin-right: 8px;
+      padding: 2px 10px;
+      font-size: 11px;
+      background: #0e639c;
+      color: var(--text-primary);
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      &:hover { background: #1177bb; }
     }
     .editor-area {
       flex: 1;
       overflow: hidden;
-    }
-    .editor-area :global(.cm-editor) {
-      height: 100%;
     }
     .no-file {
       flex: 1;
@@ -98,11 +114,34 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
   private editorView: EditorView | null = null;
   private currentPath: string | null = null;
 
-  constructor(public editorState: EditorStateService) {
+  constructor(
+    public editorState: EditorStateService,
+    private projectState: ProjectStateService,
+    private backend: TjBackend
+  ) {
+    // React to active tab changes
     effect(() => {
       const tab = this.editorState.activeTab();
       if (tab && this.editorHost) {
         this.loadEditor(tab.path, tab.content);
+      }
+    });
+
+    // React to navigation requests (click on error/task -> scroll to line)
+    effect(() => {
+      const nav = this.editorState.pendingNavigation();
+      if (nav && this.editorView && this.currentPath === nav.path) {
+        this.scrollToLine(nav.line);
+        this.editorState.pendingNavigation.set(null);
+      }
+    });
+
+    // React to diagnostic messages -> update linter squiggles
+    effect(() => {
+      const messages = this.projectState.messages();
+      if (this.editorView && this.currentPath) {
+        const diagnostics = mapDiagnostics(this.editorView, messages, this.currentPath);
+        this.editorView.dispatch(setDiagnostics(this.editorView.state, diagnostics));
       }
     });
   }
@@ -132,6 +171,33 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  saveAll(): void {
+    const sid = this.projectState.sessionId();
+    if (!sid) return;
+
+    for (const tab of this.editorState.tabs()) {
+      if (tab.dirty) {
+        this.backend.writeFile(sid, tab.path, tab.content).subscribe(() => {
+          this.editorState.markSaved(tab.path);
+        });
+      }
+    }
+  }
+
+  private scrollToLine(line: number): void {
+    if (!this.editorView) return;
+    const doc = this.editorView.state.doc;
+    const lineNum = Math.min(line, doc.lines);
+    if (lineNum < 1) return;
+
+    const lineObj = doc.line(lineNum);
+    this.editorView.dispatch({
+      selection: { anchor: lineObj.from },
+      scrollIntoView: true,
+    });
+    this.editorView.focus();
+  }
+
   private loadEditor(path: string, content: string): void {
     if (this.currentPath === path) return;
     this.currentPath = path;
@@ -142,26 +208,37 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
       doc: content,
       extensions: [
         basicSetup,
-        keymap.of([indentWithTab]),
+        keymap.of([
+          indentWithTab,
+          {
+            key: 'Mod-s',
+            run: () => { this.saveAll(); return true; },
+          },
+        ]),
         tjpLanguage(),
+        linter(() => []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             this.editorState.updateContent(path, update.state.doc.toString());
           }
         }),
         EditorView.theme({
-          '&': { height: '100%', backgroundColor: 'var(--bg-primary)' },
-          '.cm-content': { caretColor: 'var(--accent-color)' },
+          '&': { height: '100%', backgroundColor: '#1e1e1e' },
+          '.cm-content': { caretColor: '#4fc1ff', fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace", fontSize: '13px' },
           '.cm-gutters': {
-            backgroundColor: 'var(--bg-secondary)',
-            borderRight: '1px solid var(--border-color)',
-            color: 'var(--text-muted)',
+            backgroundColor: '#252526',
+            borderRight: '1px solid #3c3c3c',
+            color: '#5a5a5a',
           },
-          '.cm-activeLineGutter': { backgroundColor: 'var(--bg-active)' },
-          '.cm-activeLine': { backgroundColor: 'var(--bg-active)' },
+          '.cm-activeLineGutter': { backgroundColor: '#37373d' },
+          '.cm-activeLine': { backgroundColor: '#37373d' },
           '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
             backgroundColor: '#264f78 !important',
           },
+          '.cm-diagnostic-error': { borderLeftColor: '#f44747' },
+          '.cm-diagnostic-warning': { borderLeftColor: '#cca700' },
+          '.cm-lintRange-error': { backgroundImage: 'none', textDecoration: 'wavy underline #f44747' },
+          '.cm-lintRange-warning': { backgroundImage: 'none', textDecoration: 'wavy underline #cca700' },
         }, { dark: true }),
       ],
     });
@@ -170,5 +247,21 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
       state,
       parent: this.editorHost.nativeElement,
     });
+
+    // Apply pending diagnostics
+    const messages = this.projectState.messages();
+    if (messages.length > 0) {
+      const diagnostics = mapDiagnostics(this.editorView, messages, path);
+      this.editorView.dispatch(setDiagnostics(this.editorView.state, diagnostics));
+    }
+
+    // Apply pending navigation
+    const nav = this.editorState.pendingNavigation();
+    if (nav && nav.path === path) {
+      setTimeout(() => {
+        this.scrollToLine(nav.line);
+        this.editorState.pendingNavigation.set(null);
+      });
+    }
   }
 }

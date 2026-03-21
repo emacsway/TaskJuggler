@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, HostListener } from '@angular/core';
 import { ToolbarComponent } from './features/toolbar/toolbar.component';
 import { FileExplorerComponent } from './features/file-explorer/file-explorer.component';
 import { EditorPaneComponent } from './features/editor/editor-pane.component';
@@ -27,8 +27,39 @@ import { ProjectStateService } from './core/state/project-state.service';
   styleUrl: './app.scss',
 })
 export class App {
+  resizing: 'left' | 'bottom' | null = null;
+
   constructor(
     public ui: UiStateService,
     public project: ProjectStateService
   ) {}
+
+  startResizeLeft(event: MouseEvent): void {
+    event.preventDefault();
+    this.resizing = 'left';
+  }
+
+  startResizeBottom(event: MouseEvent): void {
+    event.preventDefault();
+    this.resizing = 'bottom';
+  }
+
+  @HostListener('document:mousemove', ['$event'])
+  onMouseMove(event: MouseEvent): void {
+    if (!this.resizing) return;
+    event.preventDefault();
+
+    if (this.resizing === 'left') {
+      const width = Math.max(200, Math.min(600, event.clientX));
+      this.ui.leftPanelWidth.set(width);
+    } else if (this.resizing === 'bottom') {
+      const height = Math.max(80, Math.min(400, window.innerHeight - event.clientY));
+      this.ui.messagePanelHeight.set(height);
+    }
+  }
+
+  @HostListener('document:mouseup')
+  onMouseUp(): void {
+    this.resizing = null;
+  }
 }

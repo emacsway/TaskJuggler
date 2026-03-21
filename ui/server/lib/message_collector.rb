@@ -18,7 +18,7 @@ module MessageCollector
           type: msg.type.to_s,
           id: msg.id.to_s,
           message: msg.message.to_s,
-          file: msg.sourceFileInfo&.fileName,
+          file: relativize(msg.sourceFileInfo&.fileName),
           line: msg.sourceFileInfo&.lineNo,
           column: msg.sourceFileInfo&.columnNo
         }
@@ -29,5 +29,9 @@ module MessageCollector
   rescue => e
     [{ type: 'error', id: 'collector', message: "Failed to collect messages: #{e.message}",
        file: nil, line: nil, column: nil }]
+  end
+
+  def self.relativize(path)
+    path
   end
 end

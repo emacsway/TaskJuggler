@@ -35,15 +35,26 @@ export class ProjectStateService {
 
   constructor(private backend: TjBackend) {}
 
+  readonly masterFile = signal<string | null>(null);
+
   async openProject(projectDir: string): Promise<void> {
     this.loading.set(true);
     try {
-      const session = await firstValue(this.backend.createSession(projectDir));
+      const session: any = await firstValue(this.backend.createSession(projectDir));
       this.sessionId.set(session.id);
       this.sessionState.set(session.state);
+      if (session.masterFile) {
+        this.masterFile.set(session.masterFile);
+      }
 
       const files = await firstValue(this.backend.listFiles(session.id));
       this.projectFiles.set(files);
+
+      // Auto-detect master file if not provided by server
+      if (!this.masterFile()) {
+        const master = files.find((f) => f.isMaster);
+        if (master) this.masterFile.set(master.path);
+      }
     } finally {
       this.loading.set(false);
     }
@@ -100,19 +111,23 @@ export class ProjectStateService {
     const sid = this.sessionId();
     if (!sid) return;
 
+    // Load each independently so one failure doesn't block others
+    const safeLoad = <T>(obs: import('rxjs').Observable<T>, fallback: T): Promise<T> =>
+      firstValue(obs).catch((err) => { console.warn('loadProjectData error:', err); return fallback; });
+
     const [meta, tasks, resources, accounts, gantt] = await Promise.all([
-      firstValue(this.backend.getProjectMeta(sid)),
-      firstValue(this.backend.getTasks(sid, scenario)),
-      firstValue(this.backend.getResources(sid, scenario)),
-      firstValue(this.backend.getAccounts(sid)),
-      firstValue(this.backend.getGanttData(sid, scenario)),
+      safeLoad(this.backend.getProjectMeta(sid), null),
+      safeLoad(this.backend.getTasks(sid, scenario), []),
+      safeLoad(this.backend.getResources(sid, scenario), []),
+      safeLoad(this.backend.getAccounts(sid), []),
+      safeLoad(this.backend.getGanttData(sid, scenario), null),
     ]);
 
-    this.projectMeta.set(meta);
+    if (meta) this.projectMeta.set(meta);
     this.tasks.set(tasks);
     this.resources.set(resources);
     this.accounts.set(accounts);
-    this.ganttData.set(gantt);
+    if (gantt) this.ganttData.set(gantt);
   }
 
   reset(): void {
