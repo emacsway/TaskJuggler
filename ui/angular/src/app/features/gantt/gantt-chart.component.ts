@@ -1,6 +1,7 @@
 import { Component, computed, signal } from '@angular/core';
 import { SlicePipe } from '@angular/common';
 import { ProjectStateService } from '../../core/state/project-state.service';
+import { UiStateService } from '../../core/state/ui-state.service';
 import { GanttTask } from '../../core/models';
 
 interface DepLine {
@@ -75,7 +76,9 @@ const ZOOM_LEVELS = [
 
               <!-- Rows -->
               @for (task of data.tasks; track task.taskId; let i = $index) {
-                <div class="gantt-row" [class.alt]="i % 2 === 1">
+                <div class="gantt-row" [class.alt]="i % 2 === 1"
+                     [class.selected]="ui.selectedTaskId() === task.taskId"
+                     (click)="selectTask(task.taskId)">
                   <div class="gantt-row-label" [style.padding-left.px]="task.level * 12 + 8">
                     <span class="row-icon" [class.milestone]="task.isMilestone" [class.container]="task.isContainer">
                       {{ task.isMilestone ? '&#9670;' : task.isContainer ? '&#9656;' : '&#9679;' }}
@@ -154,9 +157,10 @@ const ZOOM_LEVELS = [
     .dep-layer { position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none; }
     .dep-arrow { fill: none; stroke: var(--gantt-dependency); stroke-width: 1.5; }
     .gantt-row {
-      display: flex; height: 28px; border-bottom: 1px solid var(--border-color);
+      display: flex; height: 28px; border-bottom: 1px solid var(--border-color); cursor: pointer;
       &.alt { background: rgba(255,255,255,0.015); }
       &:hover { background: var(--bg-hover); }
+      &.selected { background: #264f78; }
     }
     .gantt-row-label {
       width: 200px; flex-shrink: 0; font-size: 12px; line-height: 28px;
@@ -198,7 +202,14 @@ export class GanttChartComponent {
   readonly labelAreaWidth = 200;
   readonly rowHeight = 28;
 
-  constructor(public project: ProjectStateService) {}
+  constructor(
+    public project: ProjectStateService,
+    public ui: UiStateService
+  ) {}
+
+  selectTask(taskId: string): void {
+    this.ui.selectedTaskId.set(taskId);
+  }
 
   private ppd = computed(() => ZOOM_LEVELS[this.zoomIndex()].pixelsPerDay);
 

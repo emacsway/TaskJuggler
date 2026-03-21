@@ -26,6 +26,17 @@ import { UiStateService } from '../../core/state/ui-state.service';
         </button>
       </div>
 
+      @if (project.scenarios().length > 1) {
+        <div class="toolbar-group">
+          <label class="toolbar-label">Scenario:</label>
+          <select class="toolbar-select" [ngModel]="ui.activeScenario()" (ngModelChange)="switchScenario($event)">
+            @for (s of project.scenarios(); track s.id) {
+              <option [value]="s.id">{{ s.name }}</option>
+            }
+          </select>
+        </div>
+      }
+
       <div class="toolbar-group toolbar-status">
         <span class="status-badge" [class]="'status-' + project.sessionState()">
           {{ project.sessionState() }}
@@ -60,6 +71,15 @@ import { UiStateService } from '../../core/state/ui-state.service';
     .toolbar-label {
       font-size: 12px;
       color: var(--text-secondary);
+    }
+    .toolbar-select {
+      padding: 3px 6px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      border-radius: 3px;
+      font-size: 12px;
+      &:focus { outline: 1px solid var(--accent-color); }
     }
     .toolbar-input {
       padding: 4px 8px;
@@ -143,6 +163,16 @@ export class ToolbarComponent {
     const parseResult = await this.project.parse(masterPath);
     if (parseResult.success) {
       await this.project.schedule();
+      // Set default scenario
+      const scenarios = this.project.scenarios();
+      if (scenarios.length > 0 && !this.ui.activeScenario()) {
+        this.ui.activeScenario.set(scenarios[0].id);
+      }
     }
+  }
+
+  async switchScenario(scenarioId: string): Promise<void> {
+    this.ui.activeScenario.set(scenarioId);
+    await this.project.loadProjectData(scenarioId);
   }
 }

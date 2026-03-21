@@ -5,6 +5,7 @@ import { EditorPaneComponent } from './features/editor/editor-pane.component';
 import { MessagePanelComponent } from './features/messages/message-panel.component';
 import { TaskTreeComponent } from './features/tree-views/task-tree.component';
 import { ResourceTreeComponent } from './features/tree-views/resource-tree.component';
+import { AccountTreeComponent } from './features/tree-views/account-tree.component';
 import { GanttChartComponent } from './features/gantt/gantt-chart.component';
 import { ReportViewerComponent } from './features/report-viewer/report-viewer.component';
 import { UiStateService } from './core/state/ui-state.service';
@@ -20,6 +21,7 @@ import { ProjectStateService } from './core/state/project-state.service';
     MessagePanelComponent,
     TaskTreeComponent,
     ResourceTreeComponent,
+    AccountTreeComponent,
     GanttChartComponent,
     ReportViewerComponent,
   ],

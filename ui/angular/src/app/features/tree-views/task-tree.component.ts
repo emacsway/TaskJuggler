@@ -35,7 +35,7 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
     <ng-template #taskNode let-task>
       <div
         class="tree-node"
-        [class.selected]="selectedTaskId === task.id"
+        [class.selected]="ui.selectedTaskId() === task.id"
         (click)="selectTask(task)"
         (dblclick)="navigateToSource(task)"
       >
@@ -131,7 +131,6 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
 })
 export class TaskTreeComponent {
   private expanded = new Set<string>();
-  selectedTaskId: string | null = null;
 
   // Default column widths: Task, ID, Start, End, Effort, Done
   colWidths = [200, 150, 82, 82, 55, 50];
@@ -139,7 +138,7 @@ export class TaskTreeComponent {
   constructor(
     public project: ProjectStateService,
     private editor: EditorStateService,
-    private ui: UiStateService,
+    public ui: UiStateService,
     private backend: TjBackend
   ) {
     effect(() => {
@@ -170,7 +169,7 @@ export class TaskTreeComponent {
   }
 
   selectTask(task: Task): void {
-    this.selectedTaskId = task.id;
+    this.ui.selectedTaskId.set(task.id);
   }
 
   navigateToSource(task: Task): void {

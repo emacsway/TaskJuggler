@@ -10,4 +10,10 @@ export class UiStateService {
   readonly leftPanelWidth = signal(280);
   readonly messagePanelHeight = signal(200);
   readonly messagePanelVisible = signal(true);
+
+  /** Currently selected task ID (shared between Gantt and Task tree) */
+  readonly selectedTaskId = signal<string | null>(null);
+
+  /** Active scenario name */
+  readonly activeScenario = signal<string | null>(null);
 }
