@@ -172,7 +172,9 @@ class Tj3Serializer
       end: format_time(safe_scenario_attr(task, 'end', scenario_idx)),
       complete: safe_scenario_attr(task, 'complete', scenario_idx) || 0,
       dependencies: dependencies,
-      assignedResources: safe_list_ids(task, 'assignedresources', scenario_idx)
+      assignedResources: safe_list_ids(task, 'assignedresources', scenario_idx),
+      sourceFile: relative_source_file(task),
+      sourceLine: task.sourceFileInfo&.lineNo
     }
   end
 

@@ -1,8 +1,10 @@
-import { Component, computed, signal } from '@angular/core';
+import { Component, computed, signal, HostListener } from '@angular/core';
 import { SlicePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
+import { EditorStateService } from '../../core/state/editor-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
+import { TjBackend } from '../../core/backend/backend.interface';
 import { GanttTask } from '../../core/models';
 import { GanttFilterComponent } from './gantt-filter.component';
 
@@ -53,7 +55,10 @@ const ZOOM_LEVELS = [
           <div class="gantt-wrapper" [style.width.px]="chartWidth()">
             <!-- Header -->
             <div class="gantt-header">
-              <div class="header-label-spacer"></div>
+              <div class="header-label-spacer" [style.width.px]="labelWidth()">
+                <span>Task</span>
+                <div class="label-resize-handle" (mousedown)="startLabelResize($event)"></div>
+              </div>
               <div class="header-timeline">
                 @for (label of timeLabels(); track label.x) {
                   <div class="time-label" [style.left.px]="label.x">{{ label.text }}</div>
@@ -65,7 +70,7 @@ const ZOOM_LEVELS = [
             <div class="gantt-body">
               <!-- Grid lines -->
               @for (label of timeLabels(); track label.x) {
-                <div class="grid-line" [style.left.px]="label.x + labelAreaWidth"></div>
+                <div class="grid-line" [style.left.px]="label.x + labelWidth()"></div>
               }
 
               <!-- Now line -->
@@ -81,8 +86,8 @@ const ZOOM_LEVELS = [
                   />
                 }
                 <defs>
-                  <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                    <polygon points="0 0, 8 3, 0 6" fill="#808080" />
+                  <marker id="arrowhead" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto">
+                    <polygon points="0 0, 6 2, 0 4" fill="#808080" opacity="0.5" />
                   </marker>
                 </defs>
               </svg>
@@ -91,8 +96,16 @@ const ZOOM_LEVELS = [
               @for (task of filteredTasks(); track task.taskId; let i = $index) {
                 <div class="gantt-row" [class.alt]="i % 2 === 1"
                      [class.selected]="ui.selectedTaskId() === task.taskId"
-                     (click)="selectTask(task.taskId)">
-                  <div class="gantt-row-label" [style.padding-left.px]="task.level * 12 + 8">
+                     (click)="selectTask(task.taskId)"
+                     (dblclick)="navigateToSource(task)">
+                  <div class="gantt-row-label" [style.width.px]="labelWidth()" [style.padding-left.px]="task.level * 12 + 4">
+                    @if (task.isContainer) {
+                      <span class="collapse-toggle" (click)="toggleCollapse($event, task)">
+                        {{ isCollapsed(task.taskId) ? '&#9654;' : '&#9660;' }}
+                      </span>
+                    } @else {
+                      <span class="collapse-spacer"></span>
+                    }
                     <span class="row-icon" [class.milestone]="task.isMilestone" [class.container]="task.isContainer">
                       {{ task.isMilestone ? '&#9670;' : task.isContainer ? '&#9656;' : '&#9679;' }}
                     </span>
@@ -102,14 +115,14 @@ const ZOOM_LEVELS = [
                     @if (task.isMilestone) {
                       <div
                         class="milestone"
-                        [style.left.px]="dateToX(task.start) - labelAreaWidth"
+                        [style.left.px]="dateToX(task.start) - labelWidth()"
                         [title]="task.name + ' (' + (task.start | slice:0:10) + ')'"
                       ></div>
                     } @else {
                       <div
                         class="task-bar"
                         [class.container]="task.isContainer"
-                        [style.left.px]="dateToX(task.start) - labelAreaWidth"
+                        [style.left.px]="dateToX(task.start) - labelWidth()"
                         [style.width.px]="barWidth(task)"
                         [title]="barTooltip(task)"
                       >
@@ -159,7 +172,17 @@ const ZOOM_LEVELS = [
       display: flex; position: sticky; top: 0; height: 28px;
       background: var(--bg-secondary); border-bottom: 1px solid var(--border-color); z-index: 3;
     }
-    .header-label-spacer { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border-color); }
+    .header-label-spacer {
+      flex-shrink: 0; border-right: 1px solid var(--border-color);
+      position: relative; display: flex; align-items: center;
+      padding: 0 8px; font-size: 11px; font-weight: 600; color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+    .label-resize-handle {
+      position: absolute; right: -3px; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; z-index: 5;
+      &:hover { background: var(--accent-color); opacity: 0.5; }
+    }
     .header-timeline { flex: 1; position: relative; }
     .time-label {
       position: absolute; top: 0; font-size: 10px; color: var(--text-secondary);
@@ -175,7 +198,7 @@ const ZOOM_LEVELS = [
       background: var(--gantt-now-line); z-index: 2; opacity: 0.8;
     }
     .dep-layer { position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none; }
-    .dep-arrow { fill: none; stroke: var(--gantt-dependency); stroke-width: 1.5; }
+    .dep-arrow { fill: none; stroke: var(--gantt-dependency); stroke-width: 0.7; opacity: 0.5; }
     .gantt-row {
       display: flex; height: 28px; border-bottom: 1px solid var(--border-color); cursor: pointer;
       &.alt { background: rgba(255,255,255,0.015); }
@@ -183,17 +206,27 @@ const ZOOM_LEVELS = [
       &.selected { background: #264f78; }
     }
     .gantt-row-label {
-      width: 200px; flex-shrink: 0; font-size: 12px; line-height: 28px;
+      flex-shrink: 0; font-size: 12px; line-height: 28px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       border-right: 1px solid var(--border-color); color: var(--text-primary);
       display: flex; align-items: center; gap: 4px;
+      background: var(--bg-primary); position: relative; z-index: 2;
     }
+    .gantt-row.alt .gantt-row-label { background: rgba(30,30,30,1); }
+    .gantt-row:hover .gantt-row-label { background: var(--bg-hover); }
+    .gantt-row.selected .gantt-row-label { background: #264f78; }
+    .collapse-toggle {
+      font-size: 7px; width: 12px; flex-shrink: 0; cursor: pointer;
+      color: var(--text-muted); text-align: center;
+      &:hover { color: var(--text-primary); }
+    }
+    .collapse-spacer { width: 12px; flex-shrink: 0; display: inline-block; }
     .row-icon {
       font-size: 7px; color: var(--gantt-task);
       &.milestone { color: var(--gantt-milestone); }
       &.container { color: var(--gantt-container); }
     }
-    .gantt-row-bar { flex: 1; position: relative; }
+    .gantt-row-bar { flex: 1; position: relative; overflow: hidden; }
     .task-bar {
       position: absolute; top: 6px; height: 16px;
       background: var(--gantt-task); border-radius: 3px; min-width: 4px;
@@ -204,7 +237,7 @@ const ZOOM_LEVELS = [
     .complete-fill {
       height: 100%; background: var(--gantt-complete); border-radius: 3px 0 0 3px;
     }
-    .milestone {
+    .gantt-row-bar .milestone {
       position: absolute; top: 8px; width: 12px; height: 12px;
       background: var(--gantt-milestone); transform: rotate(45deg); margin-left: -6px;
       cursor: pointer;
@@ -219,14 +252,23 @@ const ZOOM_LEVELS = [
 export class GanttChartComponent {
   readonly zoomLevels = ZOOM_LEVELS;
   readonly zoomIndex = signal(2);
-  readonly labelAreaWidth = 200;
+  readonly labelWidth = signal(200);
   readonly rowHeight = 28;
 
+  // For label column resize drag
+  private draggingLabel = false;
+  private dragStartX = 0;
+  private dragStartWidth = 0;
+
   private filterFn = signal<(task: GanttTask) => boolean>(() => true);
+  /** Set of collapsed container task IDs */
+  readonly collapsed = signal(new Set<string>());
 
   constructor(
     public project: ProjectStateService,
-    public ui: UiStateService
+    public ui: UiStateService,
+    private editor: EditorStateService,
+    private backend: TjBackend
   ) {}
 
   onFilterChanged(fn: (task: GanttTask) => boolean): void {
@@ -242,12 +284,59 @@ export class GanttChartComponent {
     this.ui.selectedTaskId.set(taskId);
   }
 
+  toggleCollapse(event: Event, task: GanttTask): void {
+    event.stopPropagation();
+    if (!task.isContainer) return;
+    const next = new Set(this.collapsed());
+    if (next.has(task.taskId)) {
+      next.delete(task.taskId);
+    } else {
+      next.add(task.taskId);
+    }
+    this.collapsed.set(next);
+  }
+
+  isCollapsed(taskId: string): boolean {
+    return this.collapsed().has(taskId);
+  }
+
+  startLabelResize(event: MouseEvent): void {
+    event.preventDefault();
+    this.draggingLabel = true;
+    this.dragStartX = event.clientX;
+    this.dragStartWidth = this.labelWidth();
+  }
+
+  @HostListener('document:mousemove', ['$event'])
+  onMouseMove(event: MouseEvent): void {
+    if (!this.draggingLabel) return;
+    const newWidth = Math.max(100, this.dragStartWidth + (event.clientX - this.dragStartX));
+    this.labelWidth.set(newWidth);
+  }
+
+  @HostListener('document:mouseup')
+  onMouseUp(): void {
+    this.draggingLabel = false;
+  }
+
+  navigateToSource(task: GanttTask): void {
+    if (!task.sourceFile) return;
+    const sid = this.project.sessionId();
+    if (!sid) return;
+
+    this.backend.readFile(sid, task.sourceFile).subscribe((content) => {
+      this.editor.openFile(task.sourceFile!, content, task.sourceLine ?? undefined);
+      this.ui.rightPanelMode.set('editor');
+    });
+  }
+
   private ppd = computed(() => ZOOM_LEVELS[this.zoomIndex()].pixelsPerDay);
 
   filteredTasks = computed((): GanttTask[] => {
     const data = this.ganttData();
     if (!data) return [];
     const fn = this.filterFn();
+    const collapsedSet = this.collapsed();
 
     // Find tasks matching filter
     const matching = new Set<string>();
@@ -259,7 +348,6 @@ export class GanttChartComponent {
     const visible = new Set(matching);
     for (const task of data.tasks) {
       if (matching.has(task.taskId)) {
-        // Walk up: include all ancestor containers
         for (const other of data.tasks) {
           if (other.isContainer && task.taskId.startsWith(other.taskId + '.')) {
             visible.add(other.taskId);
@@ -268,7 +356,17 @@ export class GanttChartComponent {
       }
     }
 
-    return data.tasks.filter(t => visible.has(t.taskId));
+    // Hide children of collapsed containers
+    return data.tasks.filter(t => {
+      if (!visible.has(t.taskId)) return false;
+      // Check if any ancestor is collapsed
+      for (const cid of collapsedSet) {
+        if (t.taskId !== cid && t.taskId.startsWith(cid + '.')) {
+          return false;
+        }
+      }
+      return true;
+    });
   });
 
   ganttData = computed(() => this.project.ganttData());
@@ -277,7 +375,7 @@ export class GanttChartComponent {
     const data = this.ganttData();
     if (!data) return 800;
     const days = this.daysBetween(data.projectStart, data.projectEnd);
-    return Math.max(800, this.labelAreaWidth + days * this.ppd());
+    return Math.max(800, this.labelWidth() + days * this.ppd());
   });
 
   nowPosition = computed(() => {
@@ -347,7 +445,7 @@ export class GanttChartComponent {
   dateToX(dateStr: string): number {
     const data = this.ganttData();
     if (!data) return 0;
-    return this.labelAreaWidth + this.daysBetween(data.projectStart, dateStr) * this.ppd();
+    return this.labelWidth() + this.daysBetween(data.projectStart, dateStr) * this.ppd();
   }
 
   barWidth(task: GanttTask): number {

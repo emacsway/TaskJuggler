@@ -16,6 +16,8 @@ export interface GanttTask {
   complete: number;
   dependencies: GanttDependency[];
   assignedResources: string[];
+  sourceFile: string | null;
+  sourceLine: number | null;
 }
 
 export interface GanttDependency {
