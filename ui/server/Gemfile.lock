@@ -1,0 +1,92 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    base64 (0.3.0)
+    bigdecimal (4.0.1)
+    date (3.5.1)
+    io-console (0.8.2)
+    logger (1.7.0)
+    mail (2.9.0)
+      logger
+      mini_mime (>= 0.1.1)
+      net-imap
+      net-pop
+      net-smtp
+    mini_mime (1.1.5)
+    mize (0.6.1)
+    multi_json (1.19.1)
+    mustermann (3.0.4)
+      ruby2_keywords (~> 0.0.1)
+    net-imap (0.6.3)
+      date
+      net-protocol
+    net-pop (0.1.2)
+      net-protocol
+    net-protocol (0.2.2)
+      timeout
+    net-smtp (0.5.1)
+      net-protocol
+    nio4r (2.7.5)
+    oj (3.16.16)
+      bigdecimal (>= 3.0)
+      ostruct (>= 0.2)
+    ostruct (0.6.3)
+    puma (6.6.1)
+      nio4r (~> 2.0)
+    rack (3.2.5)
+    rack-cors (2.0.2)
+      rack (>= 2.0.0)
+    rack-protection (4.2.1)
+      base64 (>= 0.1.0)
+      logger (>= 1.6.0)
+      rack (>= 3.0.0, < 4)
+    rack-session (2.1.1)
+      base64 (>= 0.1.0)
+      rack (>= 3.0.0)
+    rackup (2.3.1)
+      rack (>= 3)
+    readline (0.0.4)
+      reline
+    reline (0.6.3)
+      io-console (~> 0.5)
+    ruby2_keywords (0.0.5)
+    sinatra (4.2.1)
+      logger (>= 1.6.0)
+      mustermann (~> 3.0)
+      rack (>= 3.0.0, < 4)
+      rack-protection (= 4.2.1)
+      rack-session (>= 2.0.0, < 3)
+      tilt (~> 2.0)
+    sinatra-contrib (4.2.1)
+      multi_json (>= 0.0.2)
+      mustermann (~> 3.0)
+      rack-protection (= 4.2.1)
+      sinatra (= 4.2.1)
+      tilt (~> 2.0)
+    sync (0.5.0)
+    term-ansicolor (1.11.3)
+      tins (~> 1)
+    tilt (2.7.0)
+    timeout (0.6.1)
+    tins (1.52.0)
+      bigdecimal
+      mize (~> 0.6)
+      readline
+      sync
+
+PLATFORMS
+  ruby
+  x86_64-linux
+
+DEPENDENCIES
+  mail (~> 2.7)
+  oj (~> 3.16)
+  puma (~> 6.0)
+  rack-cors (~> 2.0)
+  rackup (~> 2.1)
+  sinatra (~> 4.0)
+  sinatra-contrib (~> 4.0)
+  term-ansicolor (~> 1.7)
+
+BUNDLED WITH
+   2.5.22

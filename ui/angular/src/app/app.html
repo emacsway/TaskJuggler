@@ -1,0 +1,44 @@
+<div class="app-container">
+  <app-toolbar class="app-toolbar"></app-toolbar>
+
+  <div class="app-main">
+    <div class="left-panel" [style.width.px]="ui.leftPanelWidth()">
+      <div class="panel-tabs">
+        <button [class.active]="ui.leftPanelTab() === 'files'" (click)="ui.leftPanelTab.set('files')">Files</button>
+        <button [class.active]="ui.leftPanelTab() === 'tasks'" (click)="ui.leftPanelTab.set('tasks')">Tasks</button>
+        <button [class.active]="ui.leftPanelTab() === 'resources'" (click)="ui.leftPanelTab.set('resources')">Resources</button>
+        <button [class.active]="ui.leftPanelTab() === 'accounts'" (click)="ui.leftPanelTab.set('accounts')">Accounts</button>
+      </div>
+      <div class="panel-content">
+        @switch (ui.leftPanelTab()) {
+          @case ('files') { <app-file-explorer></app-file-explorer> }
+          @case ('tasks') { <app-task-tree></app-task-tree> }
+          @case ('resources') { <app-resource-tree></app-resource-tree> }
+          @case ('accounts') { <div class="placeholder">Accounts</div> }
+        }
+      </div>
+    </div>
+
+    <div class="resize-handle vertical"></div>
+
+    <div class="right-panel">
+      <div class="panel-tabs">
+        <button [class.active]="ui.rightPanelMode() === 'editor'" (click)="ui.rightPanelMode.set('editor')">Editor</button>
+        <button [class.active]="ui.rightPanelMode() === 'gantt'" (click)="ui.rightPanelMode.set('gantt')">Gantt</button>
+        <button [class.active]="ui.rightPanelMode() === 'report'" (click)="ui.rightPanelMode.set('report')">Reports</button>
+      </div>
+      <div class="panel-content">
+        @switch (ui.rightPanelMode()) {
+          @case ('editor') { <app-editor-pane></app-editor-pane> }
+          @case ('gantt') { <app-gantt-chart></app-gantt-chart> }
+          @case ('report') { <app-report-viewer></app-report-viewer> }
+        }
+      </div>
+    </div>
+  </div>
+
+  @if (ui.messagePanelVisible()) {
+    <div class="resize-handle horizontal"></div>
+    <app-message-panel class="message-panel" [style.height.px]="ui.messagePanelHeight()"></app-message-panel>
+  }
+</div>

@@ -1,0 +1,38 @@
+:root {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-hover: #2a2d2e;
+  --bg-active: #37373d;
+  --border-color: #3c3c3c;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-muted: #5a5a5a;
+  --accent-color: #4fc1ff;
+  --error-color: #f44747;
+  --warning-color: #cca700;
+  --success-color: #89d185;
+  --gantt-task: #4fc1ff;
+  --gantt-milestone: #c586c0;
+  --gantt-container: #6a9955;
+  --gantt-complete: #89d185;
+  --gantt-dependency: #808080;
+  --gantt-now-line: #f44747;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+  &:hover { background: var(--text-muted); }
+}
