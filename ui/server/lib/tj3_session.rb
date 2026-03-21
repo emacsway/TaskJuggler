@@ -71,7 +71,11 @@ class Tj3Session
   end
 
   def write_file(path, content)
-    full = File.join(@project_dir, path)
+    full = if path.start_with?('/')
+             path
+           else
+             File.join(@project_dir, path)
+           end
     FileUtils.mkdir_p(File.dirname(full))
     File.write(full, content, encoding: 'UTF-8')
   end

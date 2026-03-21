@@ -16,6 +16,7 @@ AppConfig.appName = 'tj3ui'
 require_relative 'lib/tj3_session'
 require_relative 'lib/tj3_serializer'
 require_relative 'lib/message_collector'
+require_relative 'lib/tj3_syntax_extractor'
 
 class Tj3App < Sinatra::Base
   use Rack::Cors do
@@ -60,6 +61,12 @@ class Tj3App < Sinatra::Base
     rescue JSON::ParserError
       halt 400, json(error: 'Invalid JSON')
     end
+  end
+
+  # ── Syntax reference (cached, no session needed) ───────────────
+
+  get '/api/syntax' do
+    json Tj3SyntaxExtractor.extract
   end
 
   # ── Session management ──────────────────────────────────────────

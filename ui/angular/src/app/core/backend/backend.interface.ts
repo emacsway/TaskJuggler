@@ -45,6 +45,13 @@ export interface QueryResult {
   error?: string;
 }
 
+export interface SyntaxData {
+  /** context name -> list of valid child keywords */
+  contextMap: Record<string, string[]>;
+  /** keyword -> list of valid enum values */
+  valueMap: Record<string, string[]>;
+}
+
 export abstract class TjBackend {
   // Session lifecycle
   abstract createSession(projectDir: string): Observable<SessionInfo>;
@@ -72,6 +79,9 @@ export abstract class TjBackend {
   abstract getScenarios(sessionId: string): Observable<Scenario[]>;
   abstract getGanttData(sessionId: string, scenario?: string): Observable<GanttData>;
   abstract query(sessionId: string, request: QueryRequest): Observable<QueryResult>;
+
+  // Syntax reference
+  abstract getSyntax(): Observable<SyntaxData>;
 
   // Reports
   abstract listReports(sessionId: string): Observable<ReportDefinition[]>;

@@ -1,4 +1,4 @@
-import { Component, computed, output, signal } from '@angular/core';
+import { Component, computed, output, signal, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 export interface PertResult {
@@ -20,15 +20,15 @@ export interface PertResult {
         <div class="pert-fields">
           <div class="pert-row">
             <label>Optimistic (O):</label>
-            <input type="number" [ngModel]="optimistic()" (ngModelChange)="optimistic.set($event)" min="0" step="0.5" class="pert-input"/>
+            <input #firstInput type="number" [ngModel]="optimistic()" (ngModelChange)="optimistic.set($event)" (focus)="onFieldFocus($event)" min="0" step="0.5" class="pert-input"/>
           </div>
           <div class="pert-row">
             <label>Most Likely (M):</label>
-            <input type="number" [ngModel]="mostLikely()" (ngModelChange)="mostLikely.set($event)" min="0" step="0.5" class="pert-input"/>
+            <input type="number" [ngModel]="mostLikely()" (ngModelChange)="mostLikely.set($event)" (focus)="onFieldFocus($event)" min="0" step="0.5" class="pert-input"/>
           </div>
           <div class="pert-row">
             <label>Pessimistic (P):</label>
-            <input type="number" [ngModel]="pessimistic()" (ngModelChange)="pessimistic.set($event)" min="0" step="0.5" class="pert-input"/>
+            <input type="number" [ngModel]="pessimistic()" (ngModelChange)="pessimistic.set($event)" (focus)="onFieldFocus($event)" min="0" step="0.5" class="pert-input"/>
           </div>
           <div class="pert-row">
             <label>Unit:</label>
@@ -143,7 +143,9 @@ export interface PertResult {
     }
   `],
 })
-export class PertCalculatorComponent {
+export class PertCalculatorComponent implements AfterViewInit {
+  @ViewChild('firstInput') firstInput!: ElementRef<HTMLInputElement>;
+
   readonly close = output<void>();
   readonly insertResult = output<PertResult>();
 
@@ -151,6 +153,17 @@ export class PertCalculatorComponent {
   readonly mostLikely = signal(0);
   readonly pessimistic = signal(0);
   readonly unit = signal('d');
+
+  ngAfterViewInit(): void {
+    setTimeout(() => {
+      const el = this.firstInput?.nativeElement;
+      if (el) { el.focus(); el.select(); }
+    });
+  }
+
+  onFieldFocus(event: FocusEvent): void {
+    (event.target as HTMLInputElement).select();
+  }
 
   isValid = computed(() =>
     this.optimistic() >= 0 &&

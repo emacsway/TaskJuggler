@@ -22,6 +22,7 @@ import {
   ScheduleProgress,
   QueryRequest,
   QueryResult,
+  SyntaxData,
 } from './backend.interface';
 
 @Injectable({ providedIn: 'root' })
@@ -147,6 +148,12 @@ export class HttpBackendService extends TjBackend {
 
   query(sessionId: string, request: QueryRequest): Observable<QueryResult> {
     return this.http.post<QueryResult>(`${this.baseUrl}/sessions/${sessionId}/query`, request);
+  }
+
+  // ── Syntax ─────────────────────────────────────────────────
+
+  getSyntax(): Observable<SyntaxData> {
+    return this.http.get<SyntaxData>(`${this.baseUrl}/syntax`);
   }
 
   // ── Reports ────────────────────────────────────────────────

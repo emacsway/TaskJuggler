@@ -15,9 +15,10 @@ import { keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import { linter, setDiagnostics } from '@codemirror/lint';
 import { tjpLanguage } from './tjp-language';
-import { tjpAutocomplete } from './tjp-autocomplete';
+import { tjpAutocomplete, AutocompleteContext } from './tjp-autocomplete';
 import { mapDiagnostics } from './tjp-linter';
 import { PertCalculatorComponent, PertResult } from './pert-calculator.component';
+import { SyntaxData } from '../../core/backend/backend.interface';
 
 @Component({
   selector: 'app-editor-pane',
@@ -124,12 +125,23 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
   private editorView: EditorView | null = null;
   private currentPath: string | null = null;
   showPert = false;
+  private syntaxContextMap: Record<string, string[]> = {};
+  private syntaxValueMap: Record<string, string[]> = {};
 
   constructor(
     public editorState: EditorStateService,
     private projectState: ProjectStateService,
     private backend: TjBackend
   ) {
+    // Load syntax data from engine
+    this.backend.getSyntax().subscribe({
+      next: (data) => {
+        this.syntaxContextMap = data.contextMap || {};
+        this.syntaxValueMap = data.valueMap || {};
+      },
+      error: () => { /* use empty map as fallback */ },
+    });
+
     // React to active tab changes
     effect(() => {
       const tab = this.editorState.activeTab();
@@ -265,8 +277,10 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
         tjpLanguage(),
         tjpAutocomplete(
           () => ({
-            tasks: this.projectState.tasks().map(t => t.id),
-            resources: this.projectState.resources().map(r => r.id),
+            tasks: this.projectState.tasks().map(t => ({ id: t.id, name: t.name })),
+            resources: this.projectState.resources().map(r => ({ id: r.id, name: r.name })),
+            contextMap: this.syntaxContextMap,
+            valueMap: this.syntaxValueMap,
           }),
           () => { this.showPert = true; }
         ),
