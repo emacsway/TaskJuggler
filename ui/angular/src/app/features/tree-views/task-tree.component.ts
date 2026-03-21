@@ -1,5 +1,6 @@
 import { Component, computed, effect } from '@angular/core';
 import { NgTemplateOutlet, SlicePipe, DecimalPipe } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
 import { EditorStateService } from '../../core/state/editor-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
@@ -10,8 +11,12 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
 @Component({
   selector: 'app-task-tree',
   standalone: true,
-  imports: [NgTemplateOutlet, SlicePipe, DecimalPipe, ResizableColumnsDirective],
+  imports: [NgTemplateOutlet, SlicePipe, DecimalPipe, ResizableColumnsDirective, FormsModule],
   template: `
+    <div class="search-bar">
+      <input type="text" class="search-input" placeholder="Filter tasks..."
+             [(ngModel)]="searchQuery" (ngModelChange)="onSearch()"/>
+    </div>
     <div class="tree-header"
          appResizableColumns
          [columnWidths]="colWidths"
@@ -36,6 +41,7 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
       <div
         class="tree-node"
         [class.selected]="ui.selectedTaskId() === task.id"
+        [hidden]="!isVisible(task)"
         (click)="selectTask(task)"
         (dblclick)="navigateToSource(task)"
       >
@@ -75,6 +81,22 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
   `,
   styles: [`
     :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+    .search-bar {
+      flex-shrink: 0;
+      padding: 4px 6px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+    }
+    .search-input {
+      width: 100%;
+      padding: 3px 6px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      border-radius: 3px;
+      font-size: 12px;
+      &:focus { outline: 1px solid var(--accent-color); border-color: var(--accent-color); }
+    }
     .tree-header {
       display: flex;
       flex-shrink: 0;
@@ -131,8 +153,9 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
 })
 export class TaskTreeComponent {
   private expanded = new Set<string>();
+  searchQuery = '';
+  private matchingIds = new Set<string>();
 
-  // Default column widths: Task, ID, Start, End, Effort, Done
   colWidths = [200, 150, 82, 82, 55, 50];
 
   constructor(
@@ -145,6 +168,26 @@ export class TaskTreeComponent {
       const tasks = this.project.tasks();
       tasks.filter(t => t.parentId === null).forEach(t => this.expanded.add(t.id));
     });
+  }
+
+  onSearch(): void {
+    this.matchingIds.clear();
+    const q = this.searchQuery.toLowerCase().trim();
+    if (!q) return;
+
+    const tasks = this.project.tasks();
+    for (const t of tasks) {
+      if (t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)) {
+        this.matchingIds.add(t.id);
+        // Expand parents so match is visible
+        this.expandParents(t.parentId, tasks);
+      }
+    }
+  }
+
+  isVisible(task: Task): boolean {
+    if (!this.searchQuery.trim()) return true;
+    return this.matchingIds.has(task.id);
   }
 
   rootTasks = computed(() =>
@@ -181,5 +224,13 @@ export class TaskTreeComponent {
       this.editor.openFile(task.sourceFile!, content, task.sourceLine ?? undefined);
       this.ui.rightPanelMode.set('editor');
     });
+  }
+
+  private expandParents(parentId: string | null, tasks: Task[]): void {
+    if (!parentId) return;
+    this.expanded.add(parentId);
+    this.matchingIds.add(parentId); // make parent visible too
+    const parent = tasks.find(t => t.id === parentId);
+    if (parent) this.expandParents(parent.parentId, tasks);
   }
 }

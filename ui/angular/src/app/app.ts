@@ -10,6 +10,7 @@ import { GanttChartComponent } from './features/gantt/gantt-chart.component';
 import { ReportViewerComponent } from './features/report-viewer/report-viewer.component';
 import { UiStateService } from './core/state/ui-state.service';
 import { ProjectStateService } from './core/state/project-state.service';
+import { UiPersistenceService } from './core/state/ui-persistence.service';
 
 @Component({
   selector: 'app-root',
@@ -33,8 +34,11 @@ export class App {
 
   constructor(
     public ui: UiStateService,
-    public project: ProjectStateService
-  ) {}
+    public project: ProjectStateService,
+    private persistence: UiPersistenceService
+  ) {
+    this.persistence.init();
+  }
 
   startResizeLeft(event: MouseEvent): void {
     event.preventDefault();
@@ -63,5 +67,26 @@ export class App {
   @HostListener('document:mouseup')
   onMouseUp(): void {
     this.resizing = null;
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKeyDown(event: KeyboardEvent): void {
+    // Skip if user is typing in an input/textarea/editor
+    const tag = (event.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if ((event.target as HTMLElement)?.closest('.cm-editor')) return;
+
+    if (event.altKey) {
+      switch (event.key.toLowerCase()) {
+        case 'f': this.ui.leftPanelTab.set('files'); event.preventDefault(); break;
+        case 't': this.ui.leftPanelTab.set('tasks'); event.preventDefault(); break;
+        case 'r': this.ui.leftPanelTab.set('resources'); event.preventDefault(); break;
+        case 'a': this.ui.leftPanelTab.set('accounts'); event.preventDefault(); break;
+        case 'e': this.ui.rightPanelMode.set('editor'); event.preventDefault(); break;
+        case 'g': this.ui.rightPanelMode.set('gantt'); event.preventDefault(); break;
+        case 'p': this.ui.rightPanelMode.set('report'); event.preventDefault(); break;
+        case 'm': this.ui.messagePanelVisible.update(v => !v); event.preventDefault(); break;
+      }
+    }
   }
 }

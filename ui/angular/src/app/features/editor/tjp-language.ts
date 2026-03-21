@@ -25,7 +25,8 @@ const tjpAttributes = new Set([
   'hideaccount', 'sortresources', 'sorttasks', 'sortaccounts',
   'rollupresource', 'rolluptask', 'rollupaccount', 'loadunit',
   'timeformat', 'numberformat', 'currencyformat',
-  'stdevincomplete', 'stdevleft',
+  'stdev', 'stdevincomplete', 'stdevleft',
+  'effortdone', 'effortleft',
 ]);
 
 const tjpStreamParser = {

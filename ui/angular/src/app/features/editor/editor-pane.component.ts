@@ -15,6 +15,7 @@ import { keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import { linter, setDiagnostics } from '@codemirror/lint';
 import { tjpLanguage } from './tjp-language';
+import { tjpAutocomplete } from './tjp-autocomplete';
 import { mapDiagnostics } from './tjp-linter';
 
 @Component({
@@ -216,6 +217,10 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
           },
         ]),
         tjpLanguage(),
+        tjpAutocomplete(() => ({
+          tasks: this.projectState.tasks().map(t => t.id),
+          resources: this.projectState.resources().map(r => r.id),
+        })),
         linter(() => []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {

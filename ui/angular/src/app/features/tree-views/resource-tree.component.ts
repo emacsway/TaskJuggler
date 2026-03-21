@@ -1,5 +1,6 @@
 import { Component, computed, effect } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
 import { EditorStateService } from '../../core/state/editor-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
@@ -10,8 +11,12 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
 @Component({
   selector: 'app-resource-tree',
   standalone: true,
-  imports: [NgTemplateOutlet, ResizableColumnsDirective],
+  imports: [NgTemplateOutlet, ResizableColumnsDirective, FormsModule],
   template: `
+    <div class="search-bar">
+      <input type="text" class="search-input" placeholder="Filter resources..."
+             [(ngModel)]="searchQuery" (ngModelChange)="onSearch()"/>
+    </div>
     <div class="tree-header"
          appResizableColumns
          [columnWidths]="colWidths"
@@ -32,7 +37,7 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
     </div>
 
     <ng-template #resNode let-res>
-      <div class="tree-node" (dblclick)="navigateToSource(res)">
+      <div class="tree-node" [hidden]="!isVisible(res)" (dblclick)="navigateToSource(res)">
         <span class="col" [style.width.px]="colWidths[0]" [style.padding-left.px]="res.level * 14 + 4">
           @if (!res.isLeaf) {
             <span class="toggle" (click)="toggleExpand($event, res.id)">
@@ -58,6 +63,16 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
   `,
   styles: [`
     :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+    .search-bar {
+      flex-shrink: 0; padding: 4px 6px;
+      background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);
+    }
+    .search-input {
+      width: 100%; padding: 3px 6px;
+      background: var(--bg-primary); border: 1px solid var(--border-color);
+      color: var(--text-primary); border-radius: 3px; font-size: 12px;
+      &:focus { outline: 1px solid var(--accent-color); border-color: var(--accent-color); }
+    }
     .tree-header {
       display: flex;
       flex-shrink: 0;
@@ -100,8 +115,9 @@ import { ResizableColumnsDirective } from '../../shared/directives/resizable-col
 })
 export class ResourceTreeComponent {
   private expanded = new Set<string>();
+  searchQuery = '';
+  private matchingIds = new Set<string>();
 
-  // Default column widths: Resource, ID, Email, Eff, Rate
   colWidths = [180, 120, 160, 45, 60];
 
   constructor(
@@ -135,6 +151,32 @@ export class ResourceTreeComponent {
     } else {
       this.expanded.add(id);
     }
+  }
+
+  onSearch(): void {
+    this.matchingIds.clear();
+    const q = this.searchQuery.toLowerCase().trim();
+    if (!q) return;
+    const resources = this.project.resources();
+    for (const r of resources) {
+      if (r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)) {
+        this.matchingIds.add(r.id);
+        this.expandParents(r.parentId, resources);
+      }
+    }
+  }
+
+  isVisible(res: Resource): boolean {
+    if (!this.searchQuery.trim()) return true;
+    return this.matchingIds.has(res.id);
+  }
+
+  private expandParents(parentId: string | null, resources: Resource[]): void {
+    if (!parentId) return;
+    this.expanded.add(parentId);
+    this.matchingIds.add(parentId);
+    const parent = resources.find(r => r.id === parentId);
+    if (parent) this.expandParents(parent.parentId, resources);
   }
 
   navigateToSource(res: Resource): void {
