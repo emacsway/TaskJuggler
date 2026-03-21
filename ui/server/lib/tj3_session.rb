@@ -1,3 +1,4 @@
+require 'base64'
 require 'taskjuggler/TaskJuggler'
 require 'taskjuggler/MessageHandler'
 require 'taskjuggler/Query'
@@ -191,16 +192,28 @@ class Tj3Session
     FileUtils.mkdir_p(output_dir)
     @project.outputDir = output_dir + '/'
 
+    # Clean previous output so we can identify the newly generated file
+    old_files = Dir.glob(File.join(output_dir, "*.#{format}")).to_set
+
     success = @tj.generateReport(report_id, false, [format.to_sym])
 
     if success
-      report_files = Dir.glob(File.join(output_dir, '**', '*'))
-      html_file = report_files.find { |f| f.end_with?(".#{format}") }
+      # Find the newly created file
+      new_files = Dir.glob(File.join(output_dir, "*.#{format}"))
+      html_file = new_files.find { |f| !old_files.include?(f) }
+
+      # Fallback: match by report name (TJ3 uses name as filename)
+      html_file ||= new_files.find { |f| File.basename(f, ".#{format}") == report.name }
+
+      # Last resort: newest file by mtime
+      html_file ||= new_files.max_by { |f| File.mtime(f) }
+
       content = html_file ? File.read(html_file, encoding: 'UTF-8') : nil
 
       # Inline CSS: replace <link> to external CSS with embedded <style>
       if content && format == 'html'
         content = inline_css(content)
+        content = inline_images(content)
       end
 
       { ok: true, reportId: report_id, format: format, content: content }
@@ -236,5 +249,44 @@ class Tj3Session
 
     css_content = File.read(css_path, encoding: 'UTF-8')
     html.sub(/<link[^>]*tjreport\.css[^>]*>/, "<style>\n#{css_content}\n</style>")
+  end
+
+  # Replace relative image src with inline base64 data URIs
+  def inline_images(html)
+    tj3_root = File.expand_path('../../..', File.dirname(__FILE__))
+    report_dir = File.join(@project_dir, '.tj3ui_reports')
+
+    html.gsub(/(<img\s[^>]*?)src="([^"]+)"/) do |match|
+      prefix = $1
+      src = $2
+
+      # Skip already-inlined or absolute URLs
+      next match if src.start_with?('data:') || src.start_with?('http')
+
+      # Try to find the image file
+      img_path = nil
+      [report_dir, tj3_root, File.join(tj3_root, 'data')].each do |base|
+        candidate = File.join(base, src)
+        if File.exist?(candidate)
+          img_path = candidate
+          break
+        end
+      end
+
+      if img_path
+        ext = File.extname(img_path).delete('.').downcase
+        mime = case ext
+               when 'png' then 'image/png'
+               when 'jpg', 'jpeg' then 'image/jpeg'
+               when 'gif' then 'image/gif'
+               when 'svg' then 'image/svg+xml'
+               else 'application/octet-stream'
+               end
+        data = Base64.strict_encode64(File.binread(img_path))
+        "#{prefix}src=\"data:#{mime};base64,#{data}\""
+      else
+        match
+      end
+    end
   end
 end

@@ -18,7 +18,7 @@ import { ReportDefinition } from '../../core/models';
             (click)="generateReport(report)"
           >
             <span class="report-type">{{ report.typeSpec }}</span>
-            <span class="report-name">{{ report.name }}</span>
+            <span class="report-name">{{ report.name || report.id }}</span>
           </div>
         }
         @if (project.reports().length === 0) {
@@ -27,7 +27,9 @@ import { ReportDefinition } from '../../core/models';
       </div>
       <div class="report-content">
         @if (reportHtml()) {
-          <div class="report-html" [innerHTML]="reportHtml()"></div>
+          <div class="report-html" #reportContainer
+               [innerHTML]="reportHtml()"
+               (click)="onReportClick($event)"></div>
         } @else if (loading()) {
           <div class="placeholder">Generating report...</div>
         } @else {
@@ -37,58 +39,32 @@ import { ReportDefinition } from '../../core/models';
     </div>
   `,
   styles: [`
-    .report-viewer {
-      display: flex;
-      height: 100%;
-    }
+    .report-viewer { display: flex; height: 100%; }
     .report-sidebar {
-      width: 220px;
-      flex-shrink: 0;
-      border-right: 1px solid var(--border-color);
-      overflow-y: auto;
+      width: 220px; flex-shrink: 0;
+      border-right: 1px solid var(--border-color); overflow-y: auto;
     }
     .report-sidebar-title {
-      padding: 8px 12px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: var(--text-secondary);
+      padding: 8px 12px; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; color: var(--text-secondary);
     }
     .report-item {
-      display: flex;
-      flex-direction: column;
-      padding: 6px 12px;
-      cursor: pointer;
+      display: flex; flex-direction: column; padding: 6px 12px; cursor: pointer;
       &:hover { background: var(--bg-hover); }
       &.active { background: var(--bg-active); }
     }
     .report-type { font-size: 10px; color: var(--text-muted); }
     .report-name { font-size: 12px; color: var(--text-primary); }
-    .report-content {
-      flex: 1;
-      overflow: auto;
-      padding: 8px;
-    }
+    .report-content { flex: 1; overflow: auto; padding: 8px; }
     .report-html {
-      background: white;
-      color: black;
-      padding: 16px;
-      border-radius: 4px;
-      min-height: 100%;
+      background: white; color: black; padding: 16px;
+      border-radius: 4px; min-height: 100%;
     }
     .placeholder {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; color: var(--text-muted);
     }
-    .empty {
-      padding: 20px;
-      text-align: center;
-      color: var(--text-muted);
-      font-size: 12px;
-    }
+    .empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; }
   `],
 })
 export class ReportViewerComponent {
@@ -121,5 +97,53 @@ export class ReportViewerComponent {
         this.loading.set(false);
       },
     });
+  }
+
+  onReportClick(event: MouseEvent): void {
+    // Walk up from click target to find an <a> element
+    let el = event.target as HTMLElement | null;
+    while (el && el.tagName !== 'A') {
+      el = el.parentElement;
+      if (el?.classList?.contains('report-html')) break;
+    }
+    if (!el || el.tagName !== 'A') return;
+
+    const href = el.getAttribute('href');
+    if (!href) return;
+
+    // Prevent default navigation
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Match report by href filename
+    // TJ3 links look like "Report_Name.html" or "path/Report_Name.html"
+    const fileName = href.split('/').pop()?.replace('.html', '') || '';
+    const report = this.findReportByFileName(fileName);
+
+    if (report) {
+      this.generateReport(report);
+    } else {
+      console.warn(`Report not found for link: "${fileName}" (href: "${href}")`);
+    }
+  }
+
+  private findReportByFileName(fileName: string): ReportDefinition | null {
+    const reports = this.project.reports();
+
+    // TJ3 uses report name as filename (e.g. "FactAllSprintBacklog.html" -> name "FactAllSprintBacklog")
+    // Exact match on name is the primary lookup
+    let match = reports.find(r => r.name === fileName);
+    if (match) return match;
+
+    // Exact match on id
+    match = reports.find(r => r.id === fileName);
+    if (match) return match;
+
+    // Case-insensitive name match
+    const lower = fileName.toLowerCase();
+    match = reports.find(r => r.name.toLowerCase() === lower);
+    if (match) return match;
+
+    return null;
   }
 }
