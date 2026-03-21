@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
 import { GanttTask } from '../../core/models';
+import { GanttFilterComponent } from './gantt-filter.component';
 
 interface DepLine {
   x1: number; y1: number;
@@ -21,7 +22,7 @@ const ZOOM_LEVELS = [
 @Component({
   selector: 'app-gantt-chart',
   standalone: true,
-  imports: [SlicePipe, FormsModule],
+  imports: [SlicePipe, FormsModule, GanttFilterComponent],
   template: `
     <div class="gantt-container">
       @if (ganttData(); as data) {
@@ -46,6 +47,8 @@ const ZOOM_LEVELS = [
           }
         </div>
 
+        <app-gantt-filter (filterChanged)="onFilterChanged($event)"></app-gantt-filter>
+
         <div class="gantt-scroll" #ganttScroll>
           <div class="gantt-wrapper" [style.width.px]="chartWidth()">
             <!-- Header -->
@@ -69,7 +72,7 @@ const ZOOM_LEVELS = [
               <div class="now-line" [style.left.px]="nowPosition()"></div>
 
               <!-- Dependency arrows (SVG overlay) -->
-              <svg class="dep-layer" [attr.width]="chartWidth()" [attr.height]="data.tasks.length * rowHeight">
+              <svg class="dep-layer" [attr.width]="chartWidth()" [attr.height]="filteredTasks().length * rowHeight">
                 @for (dep of dependencyLines(); track $index) {
                   <path
                     [attr.d]="depPath(dep)"
@@ -85,7 +88,7 @@ const ZOOM_LEVELS = [
               </svg>
 
               <!-- Rows -->
-              @for (task of data.tasks; track task.taskId; let i = $index) {
+              @for (task of filteredTasks(); track task.taskId; let i = $index) {
                 <div class="gantt-row" [class.alt]="i % 2 === 1"
                      [class.selected]="ui.selectedTaskId() === task.taskId"
                      (click)="selectTask(task.taskId)">
@@ -215,14 +218,20 @@ const ZOOM_LEVELS = [
 })
 export class GanttChartComponent {
   readonly zoomLevels = ZOOM_LEVELS;
-  readonly zoomIndex = signal(2); // default: Months
+  readonly zoomIndex = signal(2);
   readonly labelAreaWidth = 200;
   readonly rowHeight = 28;
+
+  private filterFn = signal<(task: GanttTask) => boolean>(() => true);
 
   constructor(
     public project: ProjectStateService,
     public ui: UiStateService
   ) {}
+
+  onFilterChanged(fn: (task: GanttTask) => boolean): void {
+    this.filterFn.set(fn);
+  }
 
   switchScenario(scenarioId: string): void {
     this.ui.activeScenario.set(scenarioId);
@@ -234,6 +243,33 @@ export class GanttChartComponent {
   }
 
   private ppd = computed(() => ZOOM_LEVELS[this.zoomIndex()].pixelsPerDay);
+
+  filteredTasks = computed((): GanttTask[] => {
+    const data = this.ganttData();
+    if (!data) return [];
+    const fn = this.filterFn();
+
+    // Find tasks matching filter
+    const matching = new Set<string>();
+    for (const task of data.tasks) {
+      if (fn(task)) matching.add(task.taskId);
+    }
+
+    // Also include parents of matching tasks (to preserve tree structure)
+    const visible = new Set(matching);
+    for (const task of data.tasks) {
+      if (matching.has(task.taskId)) {
+        // Walk up: include all ancestor containers
+        for (const other of data.tasks) {
+          if (other.isContainer && task.taskId.startsWith(other.taskId + '.')) {
+            visible.add(other.taskId);
+          }
+        }
+      }
+    }
+
+    return data.tasks.filter(t => visible.has(t.taskId));
+  });
 
   ganttData = computed(() => this.project.ganttData());
 
@@ -280,21 +316,21 @@ export class GanttChartComponent {
   });
 
   dependencyLines = computed((): DepLine[] => {
-    const data = this.ganttData();
-    if (!data) return [];
+    const tasks = this.filteredTasks();
+    if (!tasks.length) return [];
     const lines: DepLine[] = [];
     const taskIndex = new Map<string, number>();
-    data.tasks.forEach((t, i) => taskIndex.set(t.taskId, i));
+    tasks.forEach((t, i) => taskIndex.set(t.taskId, i));
 
-    for (const task of data.tasks) {
+    for (const task of tasks) {
       for (const dep of task.dependencies) {
         if (!dep.toTaskId) continue;
         const fromIdx = taskIndex.get(dep.toTaskId);
         const toIdx = taskIndex.get(task.taskId);
         if (fromIdx == null || toIdx == null) continue;
 
-        const fromTask = data.tasks[fromIdx];
-        const toTask = data.tasks[toIdx];
+        const fromTask = tasks[fromIdx];
+        const toTask = tasks[toIdx];
 
         const x1 = this.dateToX(fromTask.end);
         const y1 = fromIdx * this.rowHeight + this.rowHeight / 2;
