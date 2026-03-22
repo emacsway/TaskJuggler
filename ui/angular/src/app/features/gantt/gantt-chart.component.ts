@@ -4,8 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
 import { EditorStateService } from '../../core/state/editor-state.service';
 import { UiStateService } from '../../core/state/ui-state.service';
-import { TjBackend } from '../../core/backend/backend.interface';
-import { GanttTask } from '../../core/models';
+import { TjBackend, CompareResult } from '../../core/backend/backend.interface';
+import { GanttTask, GanttData } from '../../core/models';
 import { GanttFilterComponent } from './gantt-filter.component';
 
 interface DepLine {
@@ -47,6 +47,13 @@ const ZOOM_LEVELS = [
               (click)="zoomIndex.set(i)"
             >{{ z.label }}</button>
           }
+          <span class="toolbar-sep"></span>
+          <button class="zoom-btn" [class.active]="compareMode()"
+                  (click)="toggleCompare()"
+                  [disabled]="compareLoading()"
+                  title="Compare Standard vs Optimized schedule">
+            {{ compareLoading() ? 'Comparing...' : compareMode() ? 'Hide Compare' : 'Compare' }}
+          </button>
         </div>
 
         <app-gantt-filter (filterChanged)="onFilterChanged($event)"></app-gantt-filter>
@@ -112,6 +119,17 @@ const ZOOM_LEVELS = [
                     {{ task.name }}
                   </div>
                   <div class="gantt-row-bar">
+                    <!-- Ghost bar (standard schedule) for comparison -->
+                    @if (compareMode() && getStdTask(task.taskId); as std) {
+                      @if (!task.isMilestone) {
+                        <div class="ghost-bar"
+                             [style.left.px]="dateToX(std.start) - labelWidth()"
+                             [style.width.px]="ghostBarWidth(std)"
+                             [title]="'Standard: ' + (std.start | slice:0:10) + ' - ' + (std.end | slice:0:10)"
+                        ></div>
+                      }
+                    }
+
                     @if (task.isMilestone) {
                       <div
                         class="milestone"
@@ -122,9 +140,11 @@ const ZOOM_LEVELS = [
                       <div
                         class="task-bar"
                         [class.container]="task.isContainer"
+                        [class.improved]="compareMode() && isImproved(task)"
+                        [class.worsened]="compareMode() && isWorsened(task)"
                         [style.left.px]="dateToX(task.start) - labelWidth()"
                         [style.width.px]="barWidth(task)"
-                        [title]="barTooltip(task)"
+                        [title]="compareMode() ? compareTooltip(task) : barTooltip(task)"
                       >
                         @if (task.complete > 0 && !task.isContainer) {
                           <div class="complete-fill" [style.width.%]="task.complete"></div>
@@ -227,12 +247,19 @@ const ZOOM_LEVELS = [
       &.container { color: var(--gantt-container); }
     }
     .gantt-row-bar { flex: 1; position: relative; overflow: hidden; }
+    .ghost-bar {
+      position: absolute; top: 8px; height: 12px;
+      background: #555; border-radius: 3px; min-width: 4px;
+      opacity: 0.3; border: 1px dashed #888;
+    }
     .task-bar {
       position: absolute; top: 6px; height: 16px;
       background: var(--gantt-task); border-radius: 3px; min-width: 4px;
       overflow: hidden; cursor: pointer;
       &.container { background: var(--gantt-container); height: 8px; top: 10px; border-radius: 2px; }
       &:hover { filter: brightness(1.2); }
+      &.improved { background: var(--success-color); }
+      &.worsened { background: var(--error-color); }
     }
     .complete-fill {
       height: 100%; background: var(--gantt-complete); border-radius: 3px 0 0 3px;
@@ -261,8 +288,13 @@ export class GanttChartComponent {
   private dragStartWidth = 0;
 
   private filterFn = signal<(task: GanttTask) => boolean>(() => true);
-  /** Set of collapsed container task IDs */
   readonly collapsed = signal(new Set<string>());
+
+  // Compare mode
+  readonly compareMode = signal(false);
+  readonly compareLoading = signal(false);
+  private stdTasks = new Map<string, GanttTask>();
+  private savedGanttData: GanttData | null = null;
 
   constructor(
     public project: ProjectStateService,
@@ -282,6 +314,76 @@ export class GanttChartComponent {
 
   selectTask(taskId: string): void {
     this.ui.selectedTaskId.set(taskId);
+  }
+
+  toggleCompare(): void {
+    if (this.compareMode()) {
+      this.compareMode.set(false);
+      this.stdTasks.clear();
+      // Restore original gantt data
+      if (this.savedGanttData) {
+        this.project.ganttData.set(this.savedGanttData);
+        this.savedGanttData = null;
+      }
+      return;
+    }
+
+    const sid = this.project.sessionId();
+    const master = this.project.masterFile();
+    if (!sid || !master) return;
+
+    this.compareLoading.set(true);
+    this.savedGanttData = this.project.ganttData();
+    const scenario = this.ui.activeScenario() || undefined;
+    this.backend.compareSchedules(sid, master, scenario).subscribe({
+      next: (result) => {
+        // Standard schedule → ghost bars
+        this.stdTasks.clear();
+        if (result.standard?.tasks) {
+          result.standard.tasks.forEach(t => this.stdTasks.set(t.taskId, t));
+        }
+        // Optimized schedule → current gantt display
+        if (result.optimized) {
+          this.project.ganttData.set(result.optimized);
+        }
+        this.compareMode.set(true);
+        this.compareLoading.set(false);
+      },
+      error: () => {
+        this.compareLoading.set(false);
+      },
+    });
+  }
+
+  getStdTask(taskId: string): GanttTask | undefined {
+    return this.stdTasks.get(taskId);
+  }
+
+  ghostBarWidth(std: GanttTask): number {
+    const days = this.daysBetween(std.start, std.end);
+    return Math.max(4, days * this.ppd());
+  }
+
+  isImproved(task: GanttTask): boolean {
+    const std = this.stdTasks.get(task.taskId);
+    if (!std) return false;
+    return new Date(task.end).getTime() < new Date(std.end).getTime() - 3600000;
+  }
+
+  isWorsened(task: GanttTask): boolean {
+    const std = this.stdTasks.get(task.taskId);
+    if (!std) return false;
+    return new Date(task.end).getTime() > new Date(std.end).getTime() + 3600000;
+  }
+
+  compareTooltip(task: GanttTask): string {
+    const std = this.stdTasks.get(task.taskId);
+    if (!std) return this.barTooltip(task);
+    const optEnd = task.end?.slice(0, 10);
+    const stdEnd = std.end?.slice(0, 10);
+    const diffDays = ((new Date(task.end).getTime() - new Date(std.end).getTime()) / 86400000).toFixed(0);
+    const sign = Number(diffDays) <= 0 ? '' : '+';
+    return `${task.name}\nOptimized: ${task.start?.slice(0,10)} - ${optEnd}\nStandard:  ${std.start?.slice(0,10)} - ${stdEnd}\nDelta: ${sign}${diffDays} days`;
   }
 
   toggleCollapse(event: Event, task: GanttTask): void {

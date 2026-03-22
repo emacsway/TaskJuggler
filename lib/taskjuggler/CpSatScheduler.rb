@@ -43,11 +43,13 @@ class TaskJuggler
       @gran = @project['scheduleGranularity']
       @project_start = @project['start']
       @project_end = @project['end']
+      @project_now = @project['now']
       @calendar_horizon = seconds_to_slots(@project_end - @project_start)
 
       # Build working-slot ↔ calendar-slot lookup tables
       build_working_time_map
-      @horizon = @working_to_calendar.size  # model works in working slots
+      @horizon = @working_to_calendar.size
+      @now_slot = @project_now ? date_to_slot(@project_now).clamp(0, @horizon) : 0
 
       @task_vars = {}
       @resource_intervals = Hash.new { |h, k| h[k] = [] }
@@ -193,8 +195,64 @@ class TaskJuggler
     def build_leaf_task_vars(task, sc, is_milestone)
       id = task.fullId
 
+      # Fix completed or in-progress tasks — don't reschedule them
+      complete = sc.instance_variable_get(:@complete) rescue nil
+      complete = complete.respond_to?(:to_f) ? complete.to_f : nil
+      fixed_start = sc.instance_variable_get(:@start) rescue nil
+      fixed_end = sc.instance_variable_get(:@end) rescue nil
+
+      # Fully completed: fix both start and end
+      if (complete && complete >= 100) && fixed_start && fixed_end
+        s_slot = date_to_slot(fixed_start).clamp(0, @horizon)
+        e_slot = date_to_slot(fixed_end).clamp(0, @horizon)
+        e_slot = [e_slot, s_slot].max
+        duration = e_slot - s_slot
+
+        start_var = @model.new_int_var(s_slot, s_slot, "#{id}_start")
+        end_var = @model.new_int_var(e_slot, e_slot, "#{id}_end")
+        size_var = @model.new_int_var(duration, duration, "#{id}_size")
+        interval = duration > 0 ?
+          @model.new_interval_var(start_var, size_var, end_var, "#{id}_interval") : nil
+
+        @task_vars[id] = TaskVars.new(
+          task: task, start_var: start_var, end_var: end_var,
+          size_var: size_var, interval_var: interval,
+          resource_id: nil, is_leaf: true, is_milestone: is_milestone
+        )
+        return
+      end
+
+      # In-progress task: fix start, optimize remaining
+      if complete && complete > 0 && fixed_start
+        s_slot = date_to_slot(fixed_start).clamp(0, @horizon)
+        start_var = @model.new_int_var(s_slot, s_slot, "#{id}_start")
+        end_var = @model.new_int_var(s_slot, @horizon, "#{id}_end")
+
+        effort = @effort_overrides[id] || (sc.instance_variable_get(:@effort) rescue 0)
+        effort = effort.respond_to?(:to_f) ? effort.to_f : 0
+        remaining = effort > 0 ? (effort * (100 - complete) / 100.0).ceil : 1
+        remaining = [remaining, 1].max
+
+        max_leave = max_resource_leave_slots(task, sc)
+        size_var = @model.new_int_var(remaining, remaining + max_leave, "#{id}_size")
+        interval = @model.new_interval_var(start_var, size_var, end_var, "#{id}_interval")
+
+        _, res_id = best_resource_efficiency(task, sc)
+        @task_vars[id] = TaskVars.new(
+          task: task, start_var: start_var, end_var: end_var,
+          size_var: size_var, interval_var: interval,
+          resource_id: res_id, is_leaf: true, is_milestone: false
+        )
+        return
+      end
+
       if is_milestone
-        start_var = @model.new_int_var(0, @horizon, "#{id}_start")
+        if fixed_start
+          ms_slot = date_to_slot(fixed_start).clamp(0, @horizon)
+          start_var = @model.new_int_var(ms_slot, ms_slot, "#{id}_start")
+        else
+          start_var = @model.new_int_var(0, @horizon, "#{id}_start")
+        end
         size_var = @model.new_int_var(0, 0, "#{id}_size")
         interval = @model.new_interval_var(start_var, size_var, start_var, "#{id}_interval")
         @task_vars[id] = TaskVars.new(
@@ -232,6 +290,8 @@ class TaskJuggler
       max_leave_slots = max_resource_leave_slots(task, sc)
       max_size = size_slots + max_leave_slots
 
+      # Allow full range — dependencies and warm start will guide placement.
+      # now-constraint is enforced as soft preference in objective.
       start_var = @model.new_int_var(0, @horizon, "#{id}_start")
       end_var = @model.new_int_var(0, @horizon, "#{id}_end")
       size_var = @model.new_int_var(size_slots, max_size, "#{id}_size")
@@ -400,7 +460,12 @@ class TaskJuggler
         tv = @task_vars[task.fullId]
         next unless tv && tv.is_leaf && !tv.is_milestone && tv.interval_var
 
+        # Skip completed tasks — they don't compete for resources anymore
         sc = task.data[@scIdx]
+        complete = sc.instance_variable_get(:@complete) rescue nil
+        complete = complete.respond_to?(:to_f) ? complete.to_f : nil
+        next if complete && complete >= 100
+
         allocations = sc.instance_variable_get(:@allocate) rescue []
         next unless allocations.is_a?(Array) && !allocations.empty?
 
@@ -703,29 +768,51 @@ class TaskJuggler
       @task_vars.each do |id, tv|
         next unless tv.is_leaf
 
+        sc = tv.task.data[@scIdx]
+
+        # Skip completed tasks
+        complete = sc.instance_variable_get(:@complete) rescue nil
+        complete = complete.respond_to?(:to_f) ? complete.to_f : nil
+        next if complete && complete >= 100
+
+        # Skip milestones with fixed dates — keep original dates exactly
+        if tv.is_milestone
+          orig_start = sc.instance_variable_get(:@start)
+          next if orig_start  # already has correct date from standard scheduler
+        end
+
         start_slot = solver_value(id, :start, tv)
         end_slot = tv.is_milestone ? start_slot : solver_value(id, :end, tv)
 
         start_date = slot_to_date(start_slot)
         end_date = slot_to_date(end_slot)
 
-        sc = tv.task.data[@scIdx]
         sc.instance_variable_set(:@start, start_date)
         sc.instance_variable_set(:@end, end_date)
         sc.instance_variable_set(:@scheduled, true)
         sc.instance_variable_set(:@milestone, true) if tv.is_milestone
       end
 
-      # Set container dates bottom-up
+      # Recalculate container dates from their children (bottom-up)
       containers = @task_vars.values.reject(&:is_leaf).sort_by { |tv| -tv.task.level }
       containers.each do |tv|
-        id = @task_vars.find { |k, v| v == tv }&.first
-        start_slot = solver_value(id, :start, tv)
-        end_slot = solver_value(id, :end, tv)
+        children_starts = []
+        children_ends = []
+
+        tv.task.children.each do |child|
+          next unless child.is_a?(TaskJuggler::Task)
+          csc = child.data[@scIdx]
+          cs = csc.instance_variable_get(:@start)
+          ce = csc.instance_variable_get(:@end)
+          children_starts << cs if cs
+          children_ends << ce if ce
+        end
+
+        next if children_starts.empty? || children_ends.empty?
 
         sc = tv.task.data[@scIdx]
-        sc.instance_variable_set(:@start, slot_to_date(start_slot))
-        sc.instance_variable_set(:@end, slot_to_date(end_slot))
+        sc.instance_variable_set(:@start, children_starts.min)
+        sc.instance_variable_set(:@end, children_ends.max)
         sc.instance_variable_set(:@scheduled, true)
       end
 

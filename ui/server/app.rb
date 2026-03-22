@@ -201,6 +201,17 @@ class Tj3App < Sinatra::Base
     json result
   end
 
+  # Compare standard vs optimized schedules
+  post '/api/sessions/:id/compare' do
+    session = find_session!(params[:id])
+    data = request_json
+    master_file = data['masterFile']
+    halt 400, json(error: 'masterFile is required') unless master_file
+    scenario = data['scenario']
+    result = session.compare_schedules(master_file, scenario)
+    json result
+  end
+
   # Monte Carlo simulation (stochastic optimization)
   post '/api/sessions/:id/monte-carlo' do
     session = find_session!(params[:id])
@@ -335,6 +346,10 @@ class Tj3App < Sinatra::Base
   end
 
   # ── Error handling ──────────────────────────────────────────────
+
+  error SystemExit do
+    json(error: 'TJ3 engine error (SystemExit)')
+  end
 
   error do
     json(error: env['sinatra.error'].message)

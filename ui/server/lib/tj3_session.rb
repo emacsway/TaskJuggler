@@ -132,6 +132,40 @@ class Tj3Session
     { success: success, state: @state.to_s, messages: @messages, mode: 'optimizer' }
   end
 
+  def compare_schedules(master_file, scenario = nil)
+    scenario_idx = resolve_scenario_idx(scenario)
+    master_path = File.join(@project_dir, master_file)
+
+    mh = TaskJuggler::MessageHandlerInstance.instance
+    mh.trapSetup = true
+
+    # Standard schedule
+    tj_std = ::TaskJuggler.new
+    TaskJuggler::Log.silent = true
+    begin
+      return { error: 'Parse failed' } unless tj_std.parse([master_path])
+      return { error: 'Schedule failed' } unless tj_std.schedule
+    rescue TaskJuggler::TjRuntimeError => e
+      return { error: "Standard schedule error: #{e.message}" }
+    end
+    std_gantt = Tj3Serializer.gantt_data(tj_std.project, scenario_idx)
+
+    # Optimized schedule
+    tj_opt = ::TaskJuggler.new
+    begin
+      return { error: 'Parse failed' } unless tj_opt.parse([master_path])
+      return { error: 'Optimize failed' } unless tj_opt.optimize
+    rescue TaskJuggler::TjRuntimeError => e
+      return { error: "Optimize error: #{e.message}" }
+    end
+    opt_gantt = Tj3Serializer.gantt_data(tj_opt.project, scenario_idx)
+
+    {
+      standard: std_gantt,
+      optimized: opt_gantt,
+    }
+  end
+
   def monte_carlo(num_runs: 20, timeout: 60)
     return { error: 'Project not scheduled' } unless scheduled?
 
@@ -248,6 +282,12 @@ class Tj3Session
   end
 
   private
+
+  def resolve_scenario_idx(scenario)
+    return 0 unless scenario && @project
+    return scenario.to_i if scenario.is_a?(Integer) || scenario.to_s =~ /\A\d+\z/
+    @project.scenarioIdx(scenario.to_s) || 0
+  end
 
   def relative_path(full_path)
     full_path.sub("#{@project_dir}/", '')

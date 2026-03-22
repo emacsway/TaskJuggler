@@ -56,6 +56,11 @@ export interface MonteCarloResult {
   error?: string;
 }
 
+export interface CompareResult {
+  standard: import('../models').GanttData;
+  optimized: import('../models').GanttData;
+}
+
 export interface SyntaxData {
   contextMap: Record<string, string[]>;
   valueMap: Record<string, string[]>;
@@ -94,6 +99,7 @@ export abstract class TjBackend {
   abstract optimize(sessionId: string, timeout?: number): Observable<ScheduleResult>;
   abstract scheduleWithProgress(sessionId: string): Observable<ScheduleProgress>;
   abstract monteCarlo(sessionId: string, numRuns?: number): Observable<MonteCarloResult>;
+  abstract compareSchedules(sessionId: string, masterFile: string, scenario?: string): Observable<CompareResult>;
   abstract getMessages(sessionId: string): Observable<DiagnosticMessage[]>;
 
   // Data queries

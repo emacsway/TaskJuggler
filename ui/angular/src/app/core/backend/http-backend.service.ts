@@ -21,6 +21,7 @@ import {
   ScheduleResult,
   ScheduleProgress,
   MonteCarloResult,
+  CompareResult,
   QueryRequest,
   QueryResult,
   SyntaxData,
@@ -93,6 +94,12 @@ export class HttpBackendService extends TjBackend {
   monteCarlo(sessionId: string, numRuns = 20): Observable<MonteCarloResult> {
     return this.http.post<MonteCarloResult>(
       `${this.baseUrl}/sessions/${sessionId}/monte-carlo`, { numRuns }
+    );
+  }
+
+  compareSchedules(sessionId: string, masterFile: string, scenario?: string): Observable<CompareResult> {
+    return this.http.post<CompareResult>(
+      `${this.baseUrl}/sessions/${sessionId}/compare`, { masterFile, scenario }
     );
   }
 
