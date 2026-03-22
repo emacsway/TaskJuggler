@@ -275,41 +275,53 @@ class TaskJuggler
     end
 
     def add_resource_constraints
-      # For each effort task, assign it to its best resource's no-overlap group
-      @task_vars.each do |_id, tv|
-        next unless tv.is_leaf && !tv.is_milestone && tv.resource_id && tv.interval_var
-        @resource_intervals[tv.resource_id] << tv.interval_var
-      end
+      alt_count = 0
 
-      # Also handle tasks with allocations but no pre-determined resource_id
-      # (duration tasks with allocate — still need resource exclusivity)
       @project.tasks.each do |task|
         next unless task.leaf?
         tv = @task_vars[task.fullId]
-        next unless tv && tv.is_leaf && !tv.is_milestone && !tv.resource_id
+        next unless tv && tv.is_leaf && !tv.is_milestone && tv.interval_var
 
         sc = task.data[@scIdx]
         allocations = sc.instance_variable_get(:@allocate) rescue []
         next unless allocations.is_a?(Array) && !allocations.empty?
 
-        # Assign first candidate for no-overlap
-        alloc = allocations.first
-        next unless alloc.respond_to?(:candidates)
+        allocations.each do |alloc|
+          next unless alloc.respond_to?(:candidates)
+          candidates = alloc.candidates(@scIdx) rescue []
+          next if candidates.empty?
 
-        candidates = alloc.candidates(@scIdx) rescue []
-        candidate = candidates.first
-        next unless candidate
+          # Resolve each candidate to leaf resource IDs
+          res_ids = candidates.map { |c|
+            if c.respond_to?(:all)
+              c.all.select(&:leaf?).map(&:fullId)
+            else
+              [c.fullId]
+            end
+          }.flatten.uniq
 
-        res_id = if candidate.respond_to?(:all)
-                   leaf = candidate.all.find(&:leaf?)
-                   leaf&.fullId
-                 else
-                   candidate.fullId
-                 end
+          if res_ids.size == 1
+            # Single candidate — direct assignment
+            @resource_intervals[res_ids[0]] << tv.interval_var
+          elsif res_ids.size > 1
+            # Multiple candidates — create optional intervals, solver picks one
+            alt_count += 1
+            presence_vars = []
 
-        if res_id && tv.interval_var
-          @resource_intervals[res_id] << tv.interval_var
-          tv.resource_id = res_id
+            res_ids.each do |rid|
+              presence = @model.new_bool_var("#{task.fullId}_on_#{rid}")
+              presence_vars << presence
+
+              opt_interval = @model.new_optional_interval_var(
+                tv.start_var, tv.size_var, tv.end_var, presence,
+                "#{task.fullId}_opt_#{rid}"
+              )
+              @resource_intervals[rid] << opt_interval
+            end
+
+            # Exactly one resource must be chosen for this allocation
+            @model.add(@model.sum(presence_vars) == 1)
+          end
         end
       end
 
@@ -320,7 +332,8 @@ class TaskJuggler
       end
 
       Log.msg { "Resource constraints: #{@resource_intervals.size} resources, " \
-                           "#{@resource_intervals.values.sum(&:size)} task-resource pairs" }
+                "#{@resource_intervals.values.sum(&:size)} intervals, " \
+                "#{alt_count} alternative choices" }
     end
 
     def add_container_constraints
