@@ -20,6 +20,7 @@ import {
   ParseResult,
   ScheduleResult,
   ScheduleProgress,
+  MonteCarloResult,
   QueryRequest,
   QueryResult,
   SyntaxData,
@@ -87,6 +88,12 @@ export class HttpBackendService extends TjBackend {
 
   optimize(sessionId: string, timeout = 30): Observable<ScheduleResult> {
     return this.http.post<ScheduleResult>(`${this.baseUrl}/sessions/${sessionId}/optimize`, { timeout });
+  }
+
+  monteCarlo(sessionId: string, numRuns = 20): Observable<MonteCarloResult> {
+    return this.http.post<MonteCarloResult>(
+      `${this.baseUrl}/sessions/${sessionId}/monte-carlo`, { numRuns }
+    );
   }
 
   scheduleWithProgress(sessionId: string): Observable<ScheduleProgress> {

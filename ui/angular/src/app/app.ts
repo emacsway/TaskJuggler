@@ -8,6 +8,7 @@ import { ResourceTreeComponent } from './features/tree-views/resource-tree.compo
 import { AccountTreeComponent } from './features/tree-views/account-tree.component';
 import { GanttChartComponent } from './features/gantt/gantt-chart.component';
 import { ReportViewerComponent } from './features/report-viewer/report-viewer.component';
+import { MonteCarloComponent } from './features/monte-carlo/monte-carlo.component';
 import { UiStateService } from './core/state/ui-state.service';
 import { ProjectStateService } from './core/state/project-state.service';
 import { UiPersistenceService } from './core/state/ui-persistence.service';
@@ -25,6 +26,7 @@ import { UiPersistenceService } from './core/state/ui-persistence.service';
     AccountTreeComponent,
     GanttChartComponent,
     ReportViewerComponent,
+    MonteCarloComponent,
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
@@ -85,6 +87,7 @@ export class App {
         case 'e': this.ui.rightPanelMode.set('editor'); event.preventDefault(); break;
         case 'g': this.ui.rightPanelMode.set('gantt'); event.preventDefault(); break;
         case 'p': this.ui.rightPanelMode.set('report'); event.preventDefault(); break;
+        case 'c': this.ui.rightPanelMode.set('montecarlo'); event.preventDefault(); break;
         case 'm': this.ui.messagePanelVisible.update(v => !v); event.preventDefault(); break;
       }
     }

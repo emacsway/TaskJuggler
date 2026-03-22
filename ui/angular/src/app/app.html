@@ -26,12 +26,14 @@
         <button [class.active]="ui.rightPanelMode() === 'editor'" (click)="ui.rightPanelMode.set('editor')">Editor</button>
         <button [class.active]="ui.rightPanelMode() === 'gantt'" (click)="ui.rightPanelMode.set('gantt')">Gantt</button>
         <button [class.active]="ui.rightPanelMode() === 'report'" (click)="ui.rightPanelMode.set('report')">Reports</button>
+        <button [class.active]="ui.rightPanelMode() === 'montecarlo'" (click)="ui.rightPanelMode.set('montecarlo')">Monte Carlo</button>
       </div>
       <div class="panel-content">
         @switch (ui.rightPanelMode()) {
           @case ('editor') { <app-editor-pane></app-editor-pane> }
           @case ('gantt') { <app-gantt-chart></app-gantt-chart> }
           @case ('report') { <app-report-viewer></app-report-viewer> }
+          @case ('montecarlo') { <app-monte-carlo></app-monte-carlo> }
         }
       </div>
     </div>

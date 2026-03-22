@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 export type LeftPanelTab = 'files' | 'tasks' | 'resources' | 'accounts';
-export type RightPanelMode = 'editor' | 'report' | 'gantt';
+export type RightPanelMode = 'editor' | 'report' | 'gantt' | 'montecarlo';
 
 @Injectable({ providedIn: 'root' })
 export class UiStateService {

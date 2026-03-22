@@ -45,6 +45,17 @@ export interface QueryResult {
   error?: string;
 }
 
+export interface MonteCarloResult {
+  runs: number;
+  p50: number;
+  p80: number;
+  p95: number;
+  min: number;
+  max: number;
+  makespans: number[];
+  error?: string;
+}
+
 export interface SyntaxData {
   contextMap: Record<string, string[]>;
   valueMap: Record<string, string[]>;
@@ -82,6 +93,7 @@ export abstract class TjBackend {
   abstract schedule(sessionId: string): Observable<ScheduleResult>;
   abstract optimize(sessionId: string, timeout?: number): Observable<ScheduleResult>;
   abstract scheduleWithProgress(sessionId: string): Observable<ScheduleProgress>;
+  abstract monteCarlo(sessionId: string, numRuns?: number): Observable<MonteCarloResult>;
   abstract getMessages(sessionId: string): Observable<DiagnosticMessage[]>;
 
   // Data queries
