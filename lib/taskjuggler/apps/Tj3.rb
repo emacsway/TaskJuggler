@@ -56,6 +56,10 @@ class TaskJuggler
       @noReports = false
       # Treat warnings like errors or not.
       @abortOnWarning = false
+      # Use CP-SAT optimizer instead of standard scheduler.
+      @optimize = false
+      # Number of Monte Carlo simulation runs (0 = disabled).
+      @monteCarloRuns = 0
       # The directory where generated reports should be put in.
       @outputDir = nil
       # The file names of the time sheet files to check.
@@ -157,6 +161,19 @@ EOT
                  format('Abort program on warnings like we do on errors.')) do
           @abortOnWarning = true
         end
+        @opts.on('--optimize',
+                 format('Use CP-SAT solver (Google OR-Tools) for optimal ' +
+                        'scheduling instead of the standard heuristic scheduler. ' +
+                        'Minimizes project makespan.')) do
+          @optimize = true
+        end
+        @opts.on('--monte-carlo N', Integer,
+                 format('Run N Monte Carlo simulations using effort stdev ' +
+                        'values to estimate schedule uncertainty. ' +
+                        'Outputs P50/P80/P95 project durations.')) do |arg|
+          @monteCarloRuns = arg
+          @optimize = true
+        end
         @opts.on('-o', '--output-dir <directory>', String,
                 format('Directory the reports should go into')) do |arg|
           @outputDir = arg + (arg[-1] == ?/ ? '' : '/')
@@ -189,8 +206,32 @@ EOT
 
       return 0 if @checkSyntax
 
-      if !tj.schedule
-        return 1 unless @forceReports
+      if @optimize
+        if !tj.optimize
+          return 1 unless @forceReports
+        end
+
+        if @monteCarloRuns > 0
+          require 'taskjuggler/CpSatScheduler'
+          optimizer = TaskJuggler::CpSatScheduler.new(tj.project, 0, timeout: 60)
+          result = optimizer.monte_carlo(num_runs: @monteCarloRuns)
+          if result
+            puts ""
+            puts "Monte Carlo Simulation (#{result[:runs]} runs):"
+            puts "  P50 (median):  #{result[:p50]} working days"
+            puts "  P80:           #{result[:p80]} working days"
+            puts "  P95:           #{result[:p95]} working days"
+            puts "  Min:           #{result[:min]} working days"
+            puts "  Max:           #{result[:max]} working days"
+            puts ""
+          else
+            warning('mc_failed', 'Monte Carlo simulation failed')
+          end
+        end
+      else
+        if !tj.schedule
+          return 1 unless @forceReports
+        end
       end
 
       # The checks of time and status sheets is probably only used for
