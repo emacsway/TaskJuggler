@@ -4,6 +4,7 @@ import {
   ViewChild,
   AfterViewInit,
   OnDestroy,
+  ChangeDetectorRef,
   effect,
 } from '@angular/core';
 import { EditorStateService } from '../../core/state/editor-state.service';
@@ -17,36 +18,43 @@ import { linter, setDiagnostics } from '@codemirror/lint';
 import { tjpLanguage } from './tjp-language';
 import { tjpAutocomplete, AutocompleteContext } from './tjp-autocomplete';
 import { mapDiagnostics } from './tjp-linter';
+import { tjpHover } from './tjp-hover';
 import { PertCalculatorComponent, PertResult } from './pert-calculator.component';
-import { SyntaxData } from '../../core/backend/backend.interface';
+import { KeywordDocPanelComponent } from './keyword-doc-panel.component';
 
 @Component({
   selector: 'app-editor-pane',
   standalone: true,
-  imports: [PertCalculatorComponent],
+  imports: [PertCalculatorComponent, KeywordDocPanelComponent],
   template: `
-    <div class="editor-container">
-      <div class="editor-tabs">
-        @for (tab of editorState.tabs(); track tab.path) {
-          <div
-            class="editor-tab"
-            [class.active]="tab.path === editorState.activeTabPath()"
-            (click)="editorState.activeTabPath.set(tab.path)"
-          >
-            <span class="tab-name">{{ fileName(tab.path) }}</span>
-            @if (tab.dirty) { <span class="tab-dirty">&bull;</span> }
-            <span class="tab-close" (click)="closeTab($event, tab.path)">&times;</span>
-          </div>
-        }
-        @if (editorState.dirtyFiles().length > 0) {
-          <button class="save-btn" (click)="saveAll()">Save All</button>
+    <div class="editor-wrapper">
+      <div class="editor-container">
+        <div class="editor-tabs">
+          @for (tab of editorState.tabs(); track tab.path) {
+            <div
+              class="editor-tab"
+              [class.active]="tab.path === editorState.activeTabPath()"
+              (click)="editorState.activeTabPath.set(tab.path)"
+            >
+              <span class="tab-name">{{ fileName(tab.path) }}</span>
+              @if (tab.dirty) { <span class="tab-dirty">&bull;</span> }
+              <span class="tab-close" (click)="closeTab($event, tab.path)">&times;</span>
+            </div>
+          }
+          @if (editorState.dirtyFiles().length > 0) {
+            <button class="save-btn" (click)="saveAll()">Save All</button>
+          }
+        </div>
+
+        <div class="editor-area" #editorHost></div>
+
+        @if (!editorState.activeTab()) {
+          <div class="no-file">Open a file from the Files panel</div>
         }
       </div>
 
-      <div class="editor-area" #editorHost></div>
-
-      @if (!editorState.activeTab()) {
-        <div class="no-file">Open a file from the Files panel</div>
+      @if (showDocPanel) {
+        <app-keyword-doc-panel #docPanel class="doc-panel-side"></app-keyword-doc-panel>
       }
     </div>
 
@@ -58,10 +66,19 @@ import { SyntaxData } from '../../core/backend/backend.interface';
     }
   `,
   styles: [`
+    .editor-wrapper {
+      display: flex;
+      height: 100%;
+    }
     .editor-container {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1;
+      min-width: 0;
+    }
+    .doc-panel-side {
+      width: 320px;
+      flex-shrink: 0;
     }
     .editor-tabs {
       display: flex;
@@ -121,23 +138,32 @@ import { SyntaxData } from '../../core/backend/backend.interface';
 })
 export class EditorPaneComponent implements AfterViewInit, OnDestroy {
   @ViewChild('editorHost') editorHost!: ElementRef<HTMLDivElement>;
+  @ViewChild('docPanel') docPanel?: KeywordDocPanelComponent;
 
   private editorView: EditorView | null = null;
   private currentPath: string | null = null;
   showPert = false;
+  showDocPanel = false;
   private syntaxContextMap: Record<string, string[]> = {};
   private syntaxValueMap: Record<string, string[]> = {};
+  private syntaxDocsMap: Record<string, string> = {};
+  private syntaxFullDocs: Record<string, any> = {};
+
+  private pendingDocKeyword: string | null = null;
 
   constructor(
     public editorState: EditorStateService,
     private projectState: ProjectStateService,
-    private backend: TjBackend
+    private backend: TjBackend,
+    private cdr: ChangeDetectorRef
   ) {
     // Load syntax data from engine
     this.backend.getSyntax().subscribe({
       next: (data) => {
         this.syntaxContextMap = data.contextMap || {};
         this.syntaxValueMap = data.valueMap || {};
+        this.syntaxDocsMap = data.docsMap || {};
+        this.syntaxFullDocs = data.fullDocs || {};
       },
       error: () => { /* use empty map as fallback */ },
     });
@@ -204,6 +230,18 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
           this.editorState.markSaved(tab.path);
         });
       }
+    }
+  }
+
+  openDocPanel(keyword: string): void {
+    this.showDocPanel = true;
+    this.pendingDocKeyword = keyword;
+    // Force change detection so the panel renders, then populate it
+    this.cdr.detectChanges();
+    if (this.docPanel) {
+      this.docPanel.setDocs(this.syntaxFullDocs);
+      this.docPanel.open(this.pendingDocKeyword);
+      this.pendingDocKeyword = null;
     }
   }
 
@@ -284,6 +322,7 @@ export class EditorPaneComponent implements AfterViewInit, OnDestroy {
           }),
           () => { this.showPert = true; }
         ),
+        tjpHover(() => this.syntaxDocsMap, (kw) => this.openDocPanel(kw)),
         linter(() => []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {

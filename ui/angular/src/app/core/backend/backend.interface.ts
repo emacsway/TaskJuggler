@@ -46,10 +46,22 @@ export interface QueryResult {
 }
 
 export interface SyntaxData {
-  /** context name -> list of valid child keywords */
   contextMap: Record<string, string[]>;
-  /** keyword -> list of valid enum values */
   valueMap: Record<string, string[]>;
+  docsMap: Record<string, string>;
+  fullDocs: Record<string, KeywordDoc>;
+}
+
+export interface KeywordDoc {
+  keyword: string;
+  fullDoc: string;
+  syntax: string;
+  seeAlso: string[];
+  contexts: string[];
+  children: string[];
+  scenarioSpecific: boolean;
+  inheritedFromProject: boolean;
+  inheritedFromParent: boolean;
 }
 
 export abstract class TjBackend {

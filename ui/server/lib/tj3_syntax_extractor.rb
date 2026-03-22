@@ -78,10 +78,51 @@ class Tj3SyntaxExtractor
       end
     end
 
+    # Build docs map: keyword -> short description (for hover)
+    docs_map = {}
+    # Build full docs: keyword -> { full doc, seeAlso, contexts, scenarioSpecific, children }
+    full_docs = {}
+
+    ref.keywords.each do |keyword_name, kwd|
+      doc = kwd.pattern.doc rescue nil
+      base = keyword_name.split('.').last
+
+      if doc && !doc.strip.empty?
+        docs_map[base] ||= doc.strip.gsub(/\s+/, ' ').slice(0, 300)
+      end
+
+      see_also = (kwd.instance_variable_get(:@seeAlso) || []).map { |s| s.keyword rescue s.to_s }
+      contexts = kwd.contexts.map { |c| c.keyword.to_s rescue c.to_s }
+      children = kwd.optionalAttributes.map { |a|
+        n = a.respond_to?(:keyword) ? a.keyword : a.to_s
+        n.include?('.') ? n.split('.').last : n
+      }.uniq.sort
+
+      syntax_str = begin
+        kwd.pattern.to_s
+      rescue
+        keyword_name
+      end
+
+      full_docs[base] ||= {
+        keyword: base,
+        fullDoc: doc&.strip || '',
+        syntax: syntax_str.to_s,
+        seeAlso: see_also,
+        contexts: contexts,
+        children: children,
+        scenarioSpecific: kwd.scenarioSpecific,
+        inheritedFromProject: kwd.inheritedFromProject,
+        inheritedFromParent: kwd.inheritedFromParent,
+      }
+    end
+
     {
       keywords: result,
       contextMap: context_map,
       valueMap: value_map,
+      docsMap: docs_map,
+      fullDocs: full_docs,
     }
   rescue => e
     $stderr.puts "SyntaxExtractor error: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
