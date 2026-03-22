@@ -60,15 +60,14 @@ class TaskJuggler
     end
 
     # Run Monte Carlo simulation using stdev on effort values.
-    # Returns hash with percentile makespans: { p50: days, p80: days, p95: days, runs: [...] }
-    def monte_carlo(num_runs: 20)
+    # scope_task_ids: optional array of task IDs — makespan computed from these tasks only
+    def monte_carlo(num_runs: 20, scope_task_ids: nil)
+      @scope_task_ids = scope_task_ids&.to_set
       results = []
 
       num_runs.times do |i|
-        # Sample effort values using stdev
         sampled_efforts = sample_efforts(i)
 
-        # Build and solve model with sampled efforts
         @model = ORTools::CpModel.new
         @solver = ORTools::CpSolver.new
         @task_vars = {}
@@ -689,14 +688,23 @@ class TaskJuggler
     def ensure_makespan_var
       return if @makespan
 
-      top_end_vars = @task_vars.values
-        .select { |tv| tv.task.parent.nil? || !tv.task.parent.is_a?(TaskJuggler::Task) }
-        .map(&:end_var)
+      if @scope_task_ids && !@scope_task_ids.empty?
+        # Scoped makespan: max end of specified tasks only
+        scoped_end_vars = @task_vars.values
+          .select { |tv| @scope_task_ids.include?(tv.task.fullId) }
+          .map(&:end_var)
+        end_vars = scoped_end_vars.empty? ? nil : scoped_end_vars
+      else
+        # Full project makespan: max end of top-level tasks
+        end_vars = @task_vars.values
+          .select { |tv| tv.task.parent.nil? || !tv.task.parent.is_a?(TaskJuggler::Task) }
+          .map(&:end_var)
+      end
 
-      return if top_end_vars.empty?
+      return if end_vars.nil? || end_vars.empty?
 
       @makespan = @model.new_int_var(0, @horizon, 'makespan')
-      @model.add_max_equality(@makespan, top_end_vars)
+      @model.add_max_equality(@makespan, end_vars)
     end
 
     # Phase 1 objective: just minimize makespan (fast)

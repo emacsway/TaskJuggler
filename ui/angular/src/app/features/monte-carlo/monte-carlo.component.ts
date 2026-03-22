@@ -1,6 +1,7 @@
 import { Component, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
+import { UiStateService } from '../../core/state/ui-state.service';
 import { TjBackend, MonteCarloResult } from '../../core/backend/backend.interface';
 
 @Component({
@@ -20,6 +21,9 @@ import { TjBackend, MonteCarloResult } from '../../core/backend/backend.interfac
         <button class="mc-btn" (click)="run()" [disabled]="loading()">
           {{ loading() ? 'Running...' : 'Run Simulation' }}
         </button>
+        @if (scopeInfo()) {
+          <span class="mc-scope">{{ scopeInfo() }}</span>
+        }
       </div>
 
       @if (result(); as r) {
@@ -97,6 +101,10 @@ import { TjBackend, MonteCarloResult } from '../../core/backend/backend.interfac
       &:hover { background: #5c4600; }
       &:disabled { opacity: 0.5; cursor: not-allowed; }
     }
+    .mc-scope {
+      font-size: 11px; color: var(--accent-color);
+      padding: 3px 8px; background: var(--bg-active); border-radius: 3px;
+    }
     .mc-results { }
     .mc-cards {
       display: flex; gap: 12px; margin-bottom: 12px;
@@ -157,8 +165,15 @@ export class MonteCarloComponent {
 
   constructor(
     private project: ProjectStateService,
+    private ui: UiStateService,
     private backend: TjBackend
   ) {}
+
+  scopeInfo = computed(() => {
+    const ids = this.ui.filteredTaskIds();
+    if (!ids) return null;
+    return `Scope: ${ids.length} filtered tasks`;
+  });
 
   histogram = computed(() => {
     const r = this.result();
@@ -205,7 +220,8 @@ export class MonteCarloComponent {
     this.loading.set(true);
     this.result.set(null);
 
-    this.backend.monteCarlo(sid, this.numRuns).subscribe({
+    const taskIds = this.ui.filteredTaskIds() || undefined;
+    this.backend.monteCarlo(sid, this.numRuns, taskIds).subscribe({
       next: (r) => {
         this.result.set(r);
         this.loading.set(false);

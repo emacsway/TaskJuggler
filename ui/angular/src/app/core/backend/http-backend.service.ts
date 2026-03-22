@@ -91,9 +91,11 @@ export class HttpBackendService extends TjBackend {
     return this.http.post<ScheduleResult>(`${this.baseUrl}/sessions/${sessionId}/optimize`, { timeout });
   }
 
-  monteCarlo(sessionId: string, numRuns = 20): Observable<MonteCarloResult> {
+  monteCarlo(sessionId: string, numRuns = 20, taskIds?: string[]): Observable<MonteCarloResult> {
+    const body: any = { numRuns };
+    if (taskIds?.length) body.taskIds = taskIds;
     return this.http.post<MonteCarloResult>(
-      `${this.baseUrl}/sessions/${sessionId}/monte-carlo`, { numRuns }
+      `${this.baseUrl}/sessions/${sessionId}/monte-carlo`, body
     );
   }
 

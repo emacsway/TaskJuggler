@@ -219,7 +219,8 @@ class Tj3App < Sinatra::Base
     data = request_json
     num_runs = (data['numRuns'] || 20).to_i.clamp(5, 100)
     timeout = (data['timeout'] || 60).to_i
-    result = session.monte_carlo(num_runs: num_runs, timeout: timeout)
+    task_ids = data['taskIds']  # optional array of task IDs to scope makespan
+    result = session.monte_carlo(num_runs: num_runs, timeout: timeout, task_ids: task_ids)
     json result
   end
 

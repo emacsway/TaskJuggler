@@ -10,12 +10,10 @@
         <button [class.active]="ui.leftPanelTab() === 'accounts'" (click)="ui.leftPanelTab.set('accounts')">Accounts</button>
       </div>
       <div class="panel-content">
-        @switch (ui.leftPanelTab()) {
-          @case ('files') { <app-file-explorer></app-file-explorer> }
-          @case ('tasks') { <app-task-tree></app-task-tree> }
-          @case ('resources') { <app-resource-tree></app-resource-tree> }
-          @case ('accounts') { <app-account-tree></app-account-tree> }
-        }
+        <app-file-explorer [hidden]="ui.leftPanelTab() !== 'files'"></app-file-explorer>
+        <app-task-tree [hidden]="ui.leftPanelTab() !== 'tasks'"></app-task-tree>
+        <app-resource-tree [hidden]="ui.leftPanelTab() !== 'resources'"></app-resource-tree>
+        <app-account-tree [hidden]="ui.leftPanelTab() !== 'accounts'"></app-account-tree>
       </div>
     </div>
 
@@ -29,12 +27,10 @@
         <button [class.active]="ui.rightPanelMode() === 'montecarlo'" (click)="ui.rightPanelMode.set('montecarlo')">Monte Carlo</button>
       </div>
       <div class="panel-content">
-        @switch (ui.rightPanelMode()) {
-          @case ('editor') { <app-editor-pane></app-editor-pane> }
-          @case ('gantt') { <app-gantt-chart></app-gantt-chart> }
-          @case ('report') { <app-report-viewer></app-report-viewer> }
-          @case ('montecarlo') { <app-monte-carlo></app-monte-carlo> }
-        }
+        <app-editor-pane [hidden]="ui.rightPanelMode() !== 'editor'"></app-editor-pane>
+        <app-gantt-chart [hidden]="ui.rightPanelMode() !== 'gantt'"></app-gantt-chart>
+        <app-report-viewer [hidden]="ui.rightPanelMode() !== 'report'"></app-report-viewer>
+        <app-monte-carlo [hidden]="ui.rightPanelMode() !== 'montecarlo'"></app-monte-carlo>
       </div>
     </div>
   </div>

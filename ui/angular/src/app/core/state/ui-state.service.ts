@@ -16,4 +16,7 @@ export class UiStateService {
 
   /** Active scenario name */
   readonly activeScenario = signal<string | null>(null);
+
+  /** Filtered task IDs from Gantt (null = all tasks) */
+  readonly filteredTaskIds = signal<string[] | null>(null);
 }

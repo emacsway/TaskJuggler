@@ -1,4 +1,4 @@
-import { Component, computed, signal, HostListener } from '@angular/core';
+import { Component, computed, signal, HostListener, effect } from '@angular/core';
 import { SlicePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ProjectStateService } from '../../core/state/project-state.service';
@@ -301,7 +301,22 @@ export class GanttChartComponent {
     public ui: UiStateService,
     private editor: EditorStateService,
     private backend: TjBackend
-  ) {}
+  ) {
+    // Publish filtered task IDs for Monte Carlo scope
+    effect(() => {
+      const tasks = this.filteredTasks();
+      const allData = this.ganttData();
+      if (!allData) { this.ui.filteredTaskIds.set(null); return; }
+
+      const isFiltered = tasks.length < allData.tasks.length;
+      if (isFiltered) {
+        // Include all filtered tasks (both leaf and container) for makespan scope
+        this.ui.filteredTaskIds.set(tasks.map(t => t.taskId));
+      } else {
+        this.ui.filteredTaskIds.set(null);
+      }
+    });
+  }
 
   onFilterChanged(fn: (task: GanttTask) => boolean): void {
     this.filterFn.set(fn);
@@ -459,9 +474,8 @@ export class GanttChartComponent {
     }
 
     // Hide children of collapsed containers
-    return data.tasks.filter(t => {
+    const result = data.tasks.filter(t => {
       if (!visible.has(t.taskId)) return false;
-      // Check if any ancestor is collapsed
       for (const cid of collapsedSet) {
         if (t.taskId !== cid && t.taskId.startsWith(cid + '.')) {
           return false;
@@ -469,6 +483,8 @@ export class GanttChartComponent {
       }
       return true;
     });
+
+    return result;
   });
 
   ganttData = computed(() => this.project.ganttData());
