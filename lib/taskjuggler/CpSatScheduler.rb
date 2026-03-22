@@ -119,14 +119,57 @@ class TaskJuggler
       add_container_constraints
       add_bound_constraints
       add_warm_start_hints
-      set_objective
+
+      # Two-phase optimization:
+      # Phase 1: minimize makespan (fast)
+      set_objective_makespan_only
+      phase1_start = Time.now
       success = solve
+      phase1_time = Time.now - phase1_start
+
+      if success && @makespan
+        optimal_makespan = @solver.value(@makespan)
+        phase1_values = save_solution
+
+        # Phase 2: only attempt if phase 1 was fast (found optimal quickly)
+        remaining = @timeout - phase1_time
+        phase2_budget = [remaining.to_i, 2].min
+        if phase2_budget > 1 && phase1_time < 2
+          set_objective_with_priority(optimal_makespan)
+          old_timeout = @timeout
+          @timeout = phase2_budget
+          unless solve
+            # Phase 2 failed — restore phase 1 solution
+            @phase1_values = phase1_values
+          end
+          @timeout = old_timeout
+        end
+      end
+
       write_back if success
       Log.exit('cp_sat')
       success
     end
 
     private
+
+    def save_solution
+      values = {}
+      @task_vars.each do |id, tv|
+        values[id] = {
+          start: @solver.value(tv.start_var),
+          end: tv.is_milestone ? @solver.value(tv.start_var) : @solver.value(tv.end_var),
+        }
+      end
+      values
+    end
+
+    def solver_value(id, which, tv)
+      var = (which == :start) ? tv.start_var : tv.end_var
+      @solver.value(var)
+    rescue
+      @phase1_values&.dig(id, which) || 0
+    end
 
     # ── Phase 1: Variables ──────────────────────────────────────
 
@@ -578,26 +621,34 @@ class TaskJuggler
 
     # ── Phase 3: Objective ──────────────────────────────────────
 
-    def set_objective
-      # Collect end vars of top-level tasks
+    def ensure_makespan_var
+      return if @makespan
+
       top_end_vars = @task_vars.values
         .select { |tv| tv.task.parent.nil? || !tv.task.parent.is_a?(TaskJuggler::Task) }
         .map(&:end_var)
 
       return if top_end_vars.empty?
 
-      makespan = @model.new_int_var(0, @horizon, 'makespan')
-      @model.add_max_equality(makespan, top_end_vars)
-      @makespan = makespan
+      @makespan = @model.new_int_var(0, @horizon, 'makespan')
+      @model.add_max_equality(@makespan, top_end_vars)
+    end
 
-      # Add priority weighting as secondary objective.
-      # Skip for large projects — the expression tree becomes too large and causes model_invalid.
-      leaf_count = @task_vars.count { |_, v| v.is_leaf }
-      if leaf_count > 100
-        @model.minimize(makespan)
-        return
-      end
-      priority_terms = []
+    # Phase 1 objective: just minimize makespan (fast)
+    def set_objective_makespan_only
+      ensure_makespan_var
+      @model.minimize(@makespan) if @makespan
+    end
+
+    # Phase 2 objective: fix makespan, minimize priority-weighted starts
+    def set_objective_with_priority(optimal_makespan)
+      return unless @makespan
+
+      # Constrain makespan to optimal value
+      @model.add(@makespan <= optimal_makespan)
+
+      # Build priority expression
+      expr = 0
       @task_vars.each do |_id, tv|
         next unless tv.is_leaf && !tv.is_milestone
 
@@ -607,23 +658,18 @@ class TaskJuggler
 
         weight = 1001 - priority.clamp(1, 1000)
         if forward
-          # ASAP: penalize late start (minimize start)
-          priority_terms << [weight, tv.start_var]
+          expr = expr + weight * tv.start_var
         else
-          # ALAP: reward late start (maximize start = minimize -start = minimize (horizon - start))
-          # Add negative weight to push start later
-          priority_terms << [-weight, tv.start_var]
+          expr = expr + (-weight) * tv.start_var
         end
       end
 
-      if priority_terms.empty?
-        @model.minimize(makespan)
-      else
-        big_weight = @horizon * 1001
-        expr = big_weight * makespan
-        priority_terms.each { |w, v| expr = expr + w * v }
-        @model.minimize(expr)
-      end
+      @model.minimize(expr)
+    end
+
+    # Combined objective for Monte Carlo (single-phase, makespan only)
+    def set_objective
+      set_objective_makespan_only
     end
 
     # ── Phase 4: Solve ──────────────────────────────────────────
@@ -654,11 +700,11 @@ class TaskJuggler
     # ── Phase 5: Write Back ─────────────────────────────────────
 
     def write_back
-      @task_vars.each do |_id, tv|
+      @task_vars.each do |id, tv|
         next unless tv.is_leaf
 
-        start_slot = @solver.value(tv.start_var)
-        end_slot = tv.is_milestone ? start_slot : @solver.value(tv.end_var)
+        start_slot = solver_value(id, :start, tv)
+        end_slot = tv.is_milestone ? start_slot : solver_value(id, :end, tv)
 
         start_date = slot_to_date(start_slot)
         end_date = slot_to_date(end_slot)
@@ -673,8 +719,9 @@ class TaskJuggler
       # Set container dates bottom-up
       containers = @task_vars.values.reject(&:is_leaf).sort_by { |tv| -tv.task.level }
       containers.each do |tv|
-        start_slot = @solver.value(tv.start_var)
-        end_slot = @solver.value(tv.end_var)
+        id = @task_vars.find { |k, v| v == tv }&.first
+        start_slot = solver_value(id, :start, tv)
+        end_slot = solver_value(id, :end, tv)
 
         sc = tv.task.data[@scIdx]
         sc.instance_variable_set(:@start, slot_to_date(start_slot))
