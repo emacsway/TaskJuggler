@@ -43,17 +43,18 @@ class TaskJuggler
       @gran = @project['scheduleGranularity']
       @project_start = @project['start']
       @project_end = @project['end']
-      @horizon = seconds_to_slots(@project_end - @project_start)
+      @calendar_horizon = seconds_to_slots(@project_end - @project_start)
 
-      working_hours = (@project['dailyworkinghours'] rescue 8.0) || 8.0
-      @calendar_scale = 24.0 / working_hours
+      # Build working-slot ↔ calendar-slot lookup tables
+      build_working_time_map
+      @horizon = @working_to_calendar.size  # model works in working slots
 
-      @task_vars = {}       # fullId -> TaskVars
+      @task_vars = {}
       @resource_intervals = Hash.new { |h, k| h[k] = [] }
       @timeout = options[:timeout] || 30
       @log_level = options[:log_level] || 0
 
-      Log.enter('cp_sat', "Building CP-SAT model (horizon=#{@horizon} slots, #{@gran}s granularity)")
+      Log.enter('cp_sat', "Building CP-SAT model (#{@horizon} working slots of #{@calendar_horizon} total)")
     end
 
     # Main entry point. Returns true on success.
@@ -157,20 +158,16 @@ class TaskJuggler
     # Returns [size_slots, assigned_resource_id]
     def compute_task_size(task, sc, effort, duration, length)
       if effort > 0
-        # Effort task: compute calendar duration from working effort.
-        # Effort is in working-time slots. Calendar includes non-working hours.
-        # Scale by (24h / dailyWorkingHours) to convert.
+        # Effort is in working-time slots. Model works in working slots — direct.
         total_eff, res_id = best_resource_efficiency(task, sc)
         total_eff = 1.0 if total_eff <= 0
-        working_slots = (effort / total_eff).ceil
-        size = (working_slots * @calendar_scale).ceil
+        size = (effort / total_eff).ceil
         [size, res_id]
       elsif duration > 0
-        # Duration in seconds, convert to slots
-        [seconds_to_slots(duration), nil]
+        # Duration is in seconds (calendar time). Convert to working slots.
+        [calendar_duration_to_working_slots(duration), nil]
       elsif length > 0
-        # Length ≈ working time slots. For MVP, treat as duration.
-        # Length is already in slots (TJ3 stores it as slot count).
+        # Length is already in working-time slots.
         [length.ceil, nil]
       else
         [0, nil]
@@ -542,24 +539,80 @@ class TaskJuggler
 
     # ── Helpers ─────────────────────────────────────────────────
 
+    # Build bidirectional mapping between working slots and calendar slots.
+    # working_to_calendar[i] = calendar slot index for i-th working slot
+    # calendar_to_working[j] = working slot index for calendar slot j (or nil if non-working)
+    def build_working_time_map
+      @working_to_calendar = []
+      @calendar_to_working = Array.new(@calendar_horizon)
+
+      wh = @project['workinghours']
+      days = wh.instance_variable_get(:@days) rescue nil
+
+      unless days
+        # Fallback: all slots are working
+        @calendar_horizon.times { |i| @working_to_calendar << i; @calendar_to_working[i] = i }
+        return
+      end
+
+      @calendar_horizon.times do |cal_slot|
+        time = @project_start + cal_slot * @gran
+        t = Time.at(time.to_i)
+        dow = t.wday  # 0=Sun
+        hour_sec = t.hour * 3600 + t.min * 60
+
+        is_working = false
+        (days[dow] || []).each do |range|
+          if hour_sec >= range[0] && hour_sec < range[1]
+            is_working = true
+            break
+          end
+        end
+
+        if is_working
+          @calendar_to_working[cal_slot] = @working_to_calendar.size
+          @working_to_calendar << cal_slot
+        end
+      end
+    end
+
     def seconds_to_slots(seconds)
       (seconds.to_f / @gran).to_i
     end
 
-    def slots_to_seconds(slots)
-      slots * @gran
-    end
-
-    def slots_to_days(slots)
-      (slots.to_f * @gran / 86400).round(1)
-    end
-
+    # Convert a calendar date to a working slot index
     def date_to_slot(date)
-      seconds_to_slots(date - @project_start)
+      cal_slot = seconds_to_slots(date - @project_start)
+      # Find nearest working slot
+      ws = @calendar_to_working[cal_slot.clamp(0, @calendar_horizon - 1)]
+      return ws if ws
+      # If non-working, find next working slot
+      (cal_slot...@calendar_horizon).each do |i|
+        ws = @calendar_to_working[i]
+        return ws if ws
+      end
+      @horizon - 1
     end
 
-    def slot_to_date(slot)
-      @project_start + slots_to_seconds(slot)
+    # Convert a working slot index to a calendar date
+    def slot_to_date(working_slot)
+      ws = working_slot.clamp(0, @working_to_calendar.size - 1)
+      cal_slot = @working_to_calendar[ws] || 0
+      @project_start + cal_slot * @gran
+    end
+
+    def slots_to_days(working_slots)
+      dwh = (@project['dailyworkinghours'] rescue 8.0) || 8.0
+      (working_slots.to_f / dwh).round(1)
+    end
+
+    # Convert calendar duration (seconds) to working slots
+    def calendar_duration_to_working_slots(seconds)
+      cal_slots = seconds_to_slots(seconds)
+      # Count how many working slots fall within cal_slots from project start
+      # This is approximate but consistent
+      dwh = (@project['dailyworkinghours'] rescue 8.0) || 8.0
+      (cal_slots.to_f * dwh / 24.0).ceil
     end
   end
 
