@@ -45,9 +45,12 @@ class TaskJuggler
       @project_end = @project['end']
       @horizon = seconds_to_slots(@project_end - @project_start)
 
+      working_hours = (@project['dailyworkinghours'] rescue 8.0) || 8.0
+      @calendar_scale = 24.0 / working_hours
+
       @task_vars = {}       # fullId -> TaskVars
-      @resource_intervals = Hash.new { |h, k| h[k] = [] }  # resource_id -> [interval_vars]
-      @timeout = options[:timeout] || 30  # seconds
+      @resource_intervals = Hash.new { |h, k| h[k] = [] }
+      @timeout = options[:timeout] || 30
       @log_level = options[:log_level] || 0
 
       Log.enter('cp_sat', "Building CP-SAT model (horizon=#{@horizon} slots, #{@gran}s granularity)")
@@ -57,12 +60,10 @@ class TaskJuggler
     def optimize
       build_variables
       add_dependency_constraints
+      add_resource_constraints
       add_container_constraints
       add_bound_constraints
-      # Resource NoOverlap is added only for small projects (< 100 leaf tasks)
-      # to avoid solver timeout on large projects
-      leaf_count = @task_vars.count { |_, v| v.is_leaf }
-      add_resource_constraints if leaf_count < 100
+      add_warm_start_hints
       set_objective
       success = solve
       write_back if success
@@ -156,18 +157,14 @@ class TaskJuggler
     # Returns [size_slots, assigned_resource_id]
     def compute_task_size(task, sc, effort, duration, length)
       if effort > 0
-        # Effort task: duration = effort / total_efficiency
-        # We work in the model's slot space. Effort is in working-time slots.
-        # Scale to calendar slots: multiply by (calendar_hours / working_hours)
+        # Effort task: compute calendar duration from working effort.
+        # Effort is in working-time slots. Calendar includes non-working hours.
+        # Scale by (24h / dailyWorkingHours) to convert.
         total_eff, res_id = best_resource_efficiency(task, sc)
         total_eff = 1.0 if total_eff <= 0
         working_slots = (effort / total_eff).ceil
-
-        # For NoOverlap to work correctly, use working slots directly.
-        # The optimizer horizon is in calendar slots but tasks "occupy" only
-        # working hours. Use working_slots as size — this is approximate but
-        # avoids infeasibility from calendar expansion.
-        [working_slots, res_id]
+        size = (working_slots * @calendar_scale).ceil
+        [size, res_id]
       elsif duration > 0
         # Duration in seconds, convert to slots
         [seconds_to_slots(duration), nil]
@@ -316,15 +313,9 @@ class TaskJuggler
         end
       end
 
-      # Add NoOverlap constraint for each resource.
-      # Skip if too many tasks per resource (> 50) to avoid solver difficulty.
-      skipped = 0
+      # Add NoOverlap constraint for each resource
       @resource_intervals.each do |res_id, intervals|
         next if intervals.size < 2
-        if intervals.size > 50
-          skipped += 1
-          next
-        end
         @model.add_no_overlap(intervals)
       end
 
@@ -401,6 +392,35 @@ class TaskJuggler
       end
     end
 
+    # ── Warm Start Hints ─────────────────────────────────────────
+
+    # If tasks already have dates (from prepareScenario or a prior schedule run),
+    # use them as hints to speed up the solver.
+    def add_warm_start_hints
+      count = 0
+      @task_vars.each do |_id, tv|
+        sc = tv.task.data[@scIdx]
+        start_date = sc.instance_variable_get(:@start) rescue nil
+        end_date = sc.instance_variable_get(:@end) rescue nil
+
+        if start_date
+          slot = date_to_slot(start_date).clamp(0, @horizon)
+          @model.add_hint(tv.start_var, slot)
+          count += 1
+        end
+
+        if end_date
+          slot = date_to_slot(end_date).clamp(0, @horizon)
+          @model.add_hint(tv.end_var, slot) unless tv.is_milestone
+        end
+      end
+
+      Log.msg { "Warm start hints: #{count} tasks" }
+    rescue => e
+      # Hints are optional — if they fail, continue without
+      Log.msg { "Warm start hints failed: #{e.message}" }
+    end
+
     # ── Phase 3: Objective ──────────────────────────────────────
 
     def set_objective
@@ -415,8 +435,13 @@ class TaskJuggler
       @model.add_max_equality(makespan, top_end_vars)
       @makespan = makespan
 
-      # Priority weighting: higher priority tasks should start earlier
-      # Use a small weight so makespan always dominates
+      # Add priority weighting as secondary objective.
+      # Skip for large projects — the expression tree becomes too large and causes model_invalid.
+      leaf_count = @task_vars.count { |_, v| v.is_leaf }
+      if leaf_count > 100
+        @model.minimize(makespan)
+        return
+      end
       priority_terms = []
       @task_vars.each do |_id, tv|
         next unless tv.is_leaf && !tv.is_milestone
@@ -425,21 +450,17 @@ class TaskJuggler
         priority = priority.respond_to?(:to_i) ? priority.to_i : 500
         forward = (tv.task.data[@scIdx].instance_variable_get(:@forward) rescue true)
 
-        # Higher priority = lower weight = scheduled earlier
         weight = 1001 - priority.clamp(1, 1000)
-
         if forward
           priority_terms << [weight, tv.start_var]
         else
-          # ALAP: penalize early end (prefer later)
-          priority_terms << [weight, tv.end_var]  # will negate below
+          priority_terms << [weight, tv.end_var]
         end
       end
 
       if priority_terms.empty?
         @model.minimize(makespan)
       else
-        # Combine: minimize(makespan * BIG_WEIGHT + sum(priority * start))
         big_weight = @horizon * 1001
         expr = big_weight * makespan
         priority_terms.each { |w, v| expr = expr + w * v }

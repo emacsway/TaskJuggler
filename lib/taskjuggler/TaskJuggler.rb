@@ -152,9 +152,8 @@ class TaskJuggler
       res = @project.optimize(options)
     rescue => msg
       warning('optimizer_error', "CP-SAT optimization failed: #{msg.message} " \
-              "at #{msg.backtrace&.first}. Falling back to standard scheduler.")
-      Log.exit('optimizer')
-      return schedule
+              "at #{msg.backtrace&.first}. Standard schedule used.")
+      res = true  # standard schedule already ran inside Project#optimize
     end
 
     @project.enableTraceReports(@generateTraces)

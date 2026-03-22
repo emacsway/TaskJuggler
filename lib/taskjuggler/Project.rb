@@ -703,14 +703,19 @@ class TaskJuggler
         AttributeBase.setMode(1)
         prepareScenario(scIdx)
 
-        # Use CP-SAT instead of scheduleScenario
         AttributeBase.setMode(2)
-        optimizer = CpSatScheduler.new(self, scIdx, options)
-        unless optimizer.optimize
-          warning('cp_sat_fallback',
-                  "CP-SAT failed for scenario '#{sc.get('name')}', " \
-                  "falling back to standard scheduler")
-          scheduleScenario(scIdx)
+
+        # Run standard scheduler first to get baseline dates (used as warm-start hints)
+        scheduleScenario(scIdx)
+
+        # Run CP-SAT optimizer to try to improve on the baseline
+        begin
+          optimizer = CpSatScheduler.new(self, scIdx, options)
+          unless optimizer.optimize
+            Log.msg { "CP-SAT could not improve schedule for scenario '#{sc.get('name')}'" }
+          end
+        rescue => e
+          Log.msg { "CP-SAT error: #{e.message}. Using standard schedule." }
         end
 
         finishScenario(scIdx)
