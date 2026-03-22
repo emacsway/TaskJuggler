@@ -63,6 +63,7 @@ EOT
 
   s.add_dependency('mail', '~> 2.7', '>= 2.7.1')
   s.add_runtime_dependency('term-ansicolor', '~> 1.7', '>= 1.7.1')
+  s.add_runtime_dependency('or-tools', '~> 0.17')
   s.add_development_dependency('rspec', '~> 2.5', '>= 2.5.0')
   s.platform = Gem::Platform::RUBY
   s.required_ruby_version  = '>= 2.0.0'
