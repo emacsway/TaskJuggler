@@ -132,6 +132,15 @@ class Tj3Session
     { success: success, state: @state.to_s, messages: @messages, mode: 'optimizer' }
   end
 
+  def monte_carlo(num_runs: 20, timeout: 60)
+    return { error: 'Project not scheduled' } unless scheduled?
+
+    require 'taskjuggler/CpSatScheduler'
+    optimizer = TaskJuggler::CpSatScheduler.new(@project, 0, timeout: timeout)
+    result = optimizer.monte_carlo(num_runs: num_runs)
+    result || { error: 'Monte Carlo failed' }
+  end
+
   def schedule_with_progress(&block)
     return unless parsed?
 

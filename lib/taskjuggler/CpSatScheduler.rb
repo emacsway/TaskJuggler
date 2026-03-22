@@ -57,6 +57,57 @@ class TaskJuggler
       Log.enter('cp_sat', "Building CP-SAT model (#{@horizon} working slots of #{@calendar_horizon} total)")
     end
 
+    # Run Monte Carlo simulation using stdev on effort values.
+    # Returns hash with percentile makespans: { p50: days, p80: days, p95: days, runs: [...] }
+    def monte_carlo(num_runs: 20)
+      results = []
+
+      num_runs.times do |i|
+        # Sample effort values using stdev
+        sampled_efforts = sample_efforts(i)
+
+        # Build and solve model with sampled efforts
+        @model = ORTools::CpModel.new
+        @solver = ORTools::CpSolver.new
+        @task_vars = {}
+        @resource_intervals = Hash.new { |h, k| h[k] = [] }
+
+        build_variables(effort_overrides: sampled_efforts)
+        add_dependency_constraints
+        add_resource_constraints
+        add_leave_constraints
+        add_limit_constraints
+        finalize_resource_no_overlap
+        add_container_constraints
+        add_bound_constraints
+        set_objective
+
+        @solver.parameters.max_time_in_seconds = [5, @timeout / num_runs].max
+
+        status = @solver.solve(@model)
+        if status == :optimal || status == :feasible
+          makespan = @solver.value(@makespan)
+          results << makespan
+        end
+      end
+
+      return nil if results.empty?
+
+      results.sort!
+      dwh = (@project['dailyworkinghours'] rescue 8.0) || 8.0
+      to_days = ->(slots) { (slots.to_f / dwh).round(1) }
+
+      {
+        runs: results.size,
+        p50: to_days.call(percentile(results, 50)),
+        p80: to_days.call(percentile(results, 80)),
+        p95: to_days.call(percentile(results, 95)),
+        min: to_days.call(results.first),
+        max: to_days.call(results.last),
+        makespans: results.map { |s| to_days.call(s) },
+      }
+    end
+
     # Main entry point. Returns true on success.
     def optimize
       build_variables
@@ -79,7 +130,8 @@ class TaskJuggler
 
     # ── Phase 1: Variables ──────────────────────────────────────
 
-    def build_variables
+    def build_variables(effort_overrides: {})
+      @effort_overrides = effort_overrides
       @project.tasks.each do |task|
         is_leaf = task.leaf?
         sc = task.data[@scIdx]
@@ -111,7 +163,7 @@ class TaskJuggler
       end
 
       # Determine task size (duration in slots)
-      effort = sc.instance_variable_get(:@effort) rescue 0
+      effort = @effort_overrides[id] || (sc.instance_variable_get(:@effort) rescue 0)
       duration = sc.instance_variable_get(:@duration) rescue 0
       length = sc.instance_variable_get(:@length) rescue 0
 
@@ -555,9 +607,12 @@ class TaskJuggler
 
         weight = 1001 - priority.clamp(1, 1000)
         if forward
+          # ASAP: penalize late start (minimize start)
           priority_terms << [weight, tv.start_var]
         else
-          priority_terms << [weight, tv.end_var]
+          # ALAP: reward late start (maximize start = minimize -start = minimize (horizon - start))
+          # Add negative weight to push start later
+          priority_terms << [-weight, tv.start_var]
         end
       end
 
@@ -728,6 +783,44 @@ class TaskJuggler
         end
       end
       max_leaves
+    end
+
+    # Sample effort values using normal distribution based on stdev
+    def sample_efforts(seed = 0)
+      rng = Random.new(seed)
+      overrides = {}
+
+      @project.tasks.each do |task|
+        next unless task.leaf?
+        sc = task.data[@scIdx]
+        effort = sc.instance_variable_get(:@effort) rescue 0
+        effort = effort.respond_to?(:to_f) ? effort.to_f : 0
+        next unless effort > 0
+
+        stdev = sc.instance_variable_get(:@stdev) rescue 0
+        stdev = stdev.respond_to?(:to_f) ? stdev.to_f : 0
+
+        if stdev > 0
+          # Box-Muller transform for normal distribution
+          u1 = rng.rand
+          u2 = rng.rand
+          z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math::PI * u2)
+          sampled = effort + z * stdev
+          sampled = [sampled, 1.0].max  # minimum 1 slot
+          overrides[task.fullId] = sampled
+        end
+      end
+
+      overrides
+    end
+
+    def percentile(sorted_array, pct)
+      return sorted_array.first if sorted_array.size == 1
+      k = (pct / 100.0) * (sorted_array.size - 1)
+      f = k.floor
+      c = k.ceil
+      return sorted_array[f] if f == c
+      sorted_array[f] + (sorted_array[c] - sorted_array[f]) * (k - f)
     end
 
     def seconds_to_slots(seconds)

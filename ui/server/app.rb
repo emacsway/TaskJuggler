@@ -201,6 +201,17 @@ class Tj3App < Sinatra::Base
     json result
   end
 
+  # Monte Carlo simulation (stochastic optimization)
+  post '/api/sessions/:id/monte-carlo' do
+    session = find_session!(params[:id])
+    halt 409, json(error: 'Project not scheduled yet') unless session.scheduled?
+    data = request_json
+    num_runs = (data['numRuns'] || 20).to_i.clamp(5, 100)
+    timeout = (data['timeout'] || 60).to_i
+    result = session.monte_carlo(num_runs: num_runs, timeout: timeout)
+    json result
+  end
+
   # SSE stream for scheduling progress
   get '/api/sessions/:id/schedule/stream' do
     session = find_session!(params[:id])
