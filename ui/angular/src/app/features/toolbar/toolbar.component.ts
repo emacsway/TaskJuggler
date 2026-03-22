@@ -24,6 +24,10 @@ import { UiStateService } from '../../core/state/ui-state.service';
         <button class="btn btn-primary" (click)="parseAndSchedule()" [disabled]="project.loading()">
           {{ project.loading() ? 'Working...' : 'Parse & Schedule' }}
         </button>
+        <button class="btn btn-optimize" (click)="parseAndOptimize()" [disabled]="project.loading()"
+                title="Use CP-SAT solver for optimal scheduling">
+          Optimize
+        </button>
       </div>
 
       @if (project.scenarios().length > 1) {
@@ -107,6 +111,12 @@ import { UiStateService } from '../../core/state/ui-state.service';
       border-color: #1177bb;
       &:hover { background: #1177bb; }
     }
+    .btn-optimize {
+      background: #4d3a00;
+      border-color: #7a5c00;
+      color: var(--warning-color);
+      &:hover { background: #5c4600; }
+    }
     .toolbar-status { margin-left: auto; }
     .status-badge {
       padding: 2px 8px;
@@ -164,6 +174,28 @@ export class ToolbarComponent {
     if (parseResult.success) {
       await this.project.schedule();
       // Set default scenario
+      const scenarios = this.project.scenarios();
+      if (scenarios.length > 0 && !this.ui.activeScenario()) {
+        this.ui.activeScenario.set(scenarios[0].id);
+      }
+    }
+  }
+
+  async parseAndOptimize(): Promise<void> {
+    const master = this.project.masterFile();
+    if (!master) {
+      const files = this.project.projectFiles();
+      const masterFile = files.find((f) => f.isMaster);
+      if (!masterFile) return;
+      this.project.masterFile.set(masterFile.path);
+    }
+
+    const masterPath = this.project.masterFile();
+    if (!masterPath) return;
+
+    const parseResult = await this.project.parse(masterPath);
+    if (parseResult.success) {
+      await this.project.optimize();
       const scenarios = this.project.scenarios();
       if (scenarios.length > 0 && !this.ui.activeScenario()) {
         this.ui.activeScenario.set(scenarios[0].id);

@@ -85,6 +85,10 @@ export class HttpBackendService extends TjBackend {
     return this.http.post<ScheduleResult>(`${this.baseUrl}/sessions/${sessionId}/schedule`, {});
   }
 
+  optimize(sessionId: string, timeout = 30): Observable<ScheduleResult> {
+    return this.http.post<ScheduleResult>(`${this.baseUrl}/sessions/${sessionId}/optimize`, { timeout });
+  }
+
   scheduleWithProgress(sessionId: string): Observable<ScheduleProgress> {
     return new Observable<ScheduleProgress>((subscriber) => {
       const eventSource = new EventSource(

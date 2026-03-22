@@ -10,3 +10,6 @@ gem 'rackup', '~> 2.1'
 # TJ3 engine dependencies
 gem 'term-ansicolor', '~> 1.7'
 gem 'mail', '~> 2.7'
+
+# CP-SAT optimizer
+gem 'or-tools', '~> 0.17'

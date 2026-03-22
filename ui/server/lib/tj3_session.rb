@@ -120,6 +120,18 @@ class Tj3Session
     { success: success, state: @state.to_s, messages: @messages }
   end
 
+  def optimize(options = {})
+    return { success: false, error: 'Project not parsed' } unless parsed?
+
+    MessageCollector.clear
+    success = @tj.optimize(options)
+
+    @messages += MessageCollector.collect
+    @state = success ? :scheduled : :error
+
+    { success: success, state: @state.to_s, messages: @messages, mode: 'optimizer' }
+  end
+
   def schedule_with_progress(&block)
     return unless parsed?
 

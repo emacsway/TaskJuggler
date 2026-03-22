@@ -107,6 +107,26 @@ export class ProjectStateService {
     }
   }
 
+  async optimize(timeout = 30): Promise<ScheduleResult> {
+    const sid = this.sessionId();
+    if (!sid) throw new Error('No active session');
+
+    this.loading.set(true);
+    try {
+      const result = await firstValue(this.backend.optimize(sid, timeout));
+      this.sessionState.set(result.state as SessionState);
+      this.messages.set(result.messages);
+
+      if (result.success) {
+        await this.loadProjectData();
+      }
+
+      return result;
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
   async loadProjectData(scenario?: string): Promise<void> {
     const sid = this.sessionId();
     if (!sid) return;

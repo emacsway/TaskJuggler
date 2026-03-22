@@ -142,6 +142,26 @@ class TaskJuggler
     res
   end
 
+  # Optimize all scenarios using CP-SAT solver. Return true if no error was
+  # detected, false otherwise. Falls back to standard scheduler on failure.
+  def optimize(options = {})
+    Log.enter('optimizer', 'Optimizing project with CP-SAT ...')
+    @project.warnTsDeltas = @warnTsDeltas
+
+    begin
+      res = @project.optimize(options)
+    rescue => msg
+      warning('optimizer_error', "CP-SAT optimization failed: #{msg.message} " \
+              "at #{msg.backtrace&.first}. Falling back to standard scheduler.")
+      Log.exit('optimizer')
+      return schedule
+    end
+
+    @project.enableTraceReports(@generateTraces)
+    Log.exit('optimizer')
+    res
+  end
+
   # Generate all specified reports. The project must have been scheduled before
   # this method can be called. It returns true if no error occured, false
   # otherwise.

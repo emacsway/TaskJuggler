@@ -679,6 +679,50 @@ class TaskJuggler
       true
     end
 
+    # Optimize all scenarios using CP-SAT solver instead of standard scheduler.
+    # Prepares scenarios the same way, but uses CpSatScheduler for scheduling.
+    def optimize(options = {})
+      require 'taskjuggler/CpSatScheduler'
+
+      initScoreboards
+
+      [ @accounts, @shifts, @resources, @tasks ].each do |p|
+        p.index
+      end
+
+      if @tasks.empty?
+        error('no_tasks', "No tasks defined")
+      end
+
+      @scenarios.each do |sc|
+        next unless sc.get('active')
+
+        scIdx = scenarioIdx(sc)
+
+        # Prepare scenario (inheritance, Xref, etc.) — same as standard
+        AttributeBase.setMode(1)
+        prepareScenario(scIdx)
+
+        # Use CP-SAT instead of scheduleScenario
+        AttributeBase.setMode(2)
+        optimizer = CpSatScheduler.new(self, scIdx, options)
+        unless optimizer.optimize
+          warning('cp_sat_fallback',
+                  "CP-SAT failed for scenario '#{sc.get('name')}', " \
+                  "falling back to standard scheduler")
+          scheduleScenario(scIdx)
+        end
+
+        finishScenario(scIdx)
+      end
+
+      resources.each { |r| r.checkFailsAndWarnings }
+      tasks.each { |t| t.checkFailsAndWarnings }
+
+      @timeSheets.warnOnDelta if @warnTsDeltas
+      true
+    end
+
     # Add the CSV output format to all reports of type 'tracereport' if
     # _enable_ is true. Otherwise remove all CSV output formats.
     def enableTraceReports(enable)

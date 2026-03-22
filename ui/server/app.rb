@@ -185,10 +185,19 @@ class Tj3App < Sinatra::Base
     json result
   end
 
-  # Schedule project
+  # Schedule project (standard scheduler)
   post '/api/sessions/:id/schedule' do
     session = find_session!(params[:id])
     result = session.schedule
+    json result
+  end
+
+  # Optimize project (CP-SAT solver)
+  post '/api/sessions/:id/optimize' do
+    session = find_session!(params[:id])
+    data = request_json
+    timeout = (data['timeout'] || 30).to_i
+    result = session.optimize(timeout: timeout)
     json result
   end
 

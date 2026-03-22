@@ -1,0 +1,532 @@
+#!/usr/bin/env ruby -w
+# frozen_string_literal: true
+# encoding: UTF-8
+#
+# = CpSatScheduler.rb -- The TaskJuggler III Project Management Software
+#
+# Alternative scheduling engine using Google OR-Tools CP-SAT solver.
+# Produces optimal or near-optimal schedules by minimizing project makespan.
+#
+# Usage:
+#   scheduler = CpSatScheduler.new(project, scenarioIdx)
+#   scheduler.optimize  # returns true on success
+
+require 'or-tools'
+require 'taskjuggler/MessageHandler'
+require 'taskjuggler/Log'
+
+class TaskJuggler
+
+  class CpSatScheduler
+
+    include MessageHandler
+
+    # Struct to hold CP-SAT variables for each task
+    TaskVars = Struct.new(
+      :task,          # TJ3 Task object
+      :start_var,     # CP-SAT IntVar for start slot
+      :end_var,       # CP-SAT IntVar for end slot
+      :size_var,      # CP-SAT IntVar or integer for duration in slots
+      :interval_var,  # CP-SAT IntervalVar
+      :resource_id,   # Assigned resource ID (for effort tasks)
+      :is_leaf,       # Boolean
+      :is_milestone,  # Boolean
+      keyword_init: true
+    )
+
+    def initialize(project, scenarioIdx, options = {})
+      @project = project
+      @scIdx = scenarioIdx
+      @model = ORTools::CpModel.new
+      @solver = ORTools::CpSolver.new
+
+      @gran = @project['scheduleGranularity']
+      @project_start = @project['start']
+      @project_end = @project['end']
+      @horizon = seconds_to_slots(@project_end - @project_start)
+
+      @task_vars = {}       # fullId -> TaskVars
+      @resource_intervals = Hash.new { |h, k| h[k] = [] }  # resource_id -> [interval_vars]
+      @timeout = options[:timeout] || 30  # seconds
+      @log_level = options[:log_level] || 0
+
+      Log.enter('cp_sat', "Building CP-SAT model (horizon=#{@horizon} slots, #{@gran}s granularity)")
+    end
+
+    # Main entry point. Returns true on success.
+    def optimize
+      build_variables
+      add_dependency_constraints
+      add_container_constraints
+      add_bound_constraints
+      # Resource NoOverlap is added only for small projects (< 100 leaf tasks)
+      # to avoid solver timeout on large projects
+      leaf_count = @task_vars.count { |_, v| v.is_leaf }
+      add_resource_constraints if leaf_count < 100
+      set_objective
+      success = solve
+      write_back if success
+      Log.exit('cp_sat')
+      success
+    end
+
+    private
+
+    # ── Phase 1: Variables ──────────────────────────────────────
+
+    def build_variables
+      @project.tasks.each do |task|
+        is_leaf = task.leaf?
+        sc = task.data[@scIdx]
+        is_milestone = sc.instance_variable_get(:@milestone) rescue false
+
+        if is_leaf
+          build_leaf_task_vars(task, sc, is_milestone)
+        else
+          build_container_task_vars(task)
+        end
+      end
+
+      Log.msg { "Variables: #{@task_vars.size} tasks (#{@task_vars.count { |_, v| v.is_leaf }} leaf)" }
+    end
+
+    def build_leaf_task_vars(task, sc, is_milestone)
+      id = task.fullId
+
+      if is_milestone
+        start_var = @model.new_int_var(0, @horizon, "#{id}_start")
+        size_var = @model.new_int_var(0, 0, "#{id}_size")
+        interval = @model.new_interval_var(start_var, size_var, start_var, "#{id}_interval")
+        @task_vars[id] = TaskVars.new(
+          task: task, start_var: start_var, end_var: start_var,
+          size_var: size_var, interval_var: interval,
+          resource_id: nil, is_leaf: true, is_milestone: true
+        )
+        return
+      end
+
+      # Determine task size (duration in slots)
+      effort = sc.instance_variable_get(:@effort) rescue 0
+      duration = sc.instance_variable_get(:@duration) rescue 0
+      length = sc.instance_variable_get(:@length) rescue 0
+
+      # Convert EffortDistribution to numeric
+      effort = effort.respond_to?(:to_f) ? effort.to_f : (effort || 0)
+      duration = duration.respond_to?(:to_f) ? duration.to_f : (duration || 0)
+      length = length.respond_to?(:to_f) ? length.to_f : (length || 0)
+
+      size_slots, resource_id = compute_task_size(task, sc, effort, duration, length)
+
+      if size_slots <= 0
+        # Task with fixed start+end or zero duration — try to derive
+        fixed_start = sc.instance_variable_get(:@start) rescue nil
+        fixed_end = sc.instance_variable_get(:@end) rescue nil
+        if fixed_start && fixed_end
+          size_slots = [1, seconds_to_slots(fixed_end - fixed_start)].max
+        else
+          size_slots = 1  # minimum 1 slot
+        end
+      end
+
+      start_var = @model.new_int_var(0, @horizon, "#{id}_start")
+      end_var = @model.new_int_var(0, @horizon, "#{id}_end")
+      size_var = @model.new_int_var(size_slots, size_slots, "#{id}_size")
+      interval = @model.new_interval_var(start_var, size_var, end_var, "#{id}_interval")
+
+      @task_vars[id] = TaskVars.new(
+        task: task, start_var: start_var, end_var: end_var,
+        size_var: size_var, interval_var: interval,
+        resource_id: resource_id, is_leaf: true, is_milestone: false
+      )
+    end
+
+    def build_container_task_vars(task)
+      id = task.fullId
+      start_var = @model.new_int_var(0, @horizon, "#{id}_start")
+      end_var = @model.new_int_var(0, @horizon, "#{id}_end")
+
+      @task_vars[id] = TaskVars.new(
+        task: task, start_var: start_var, end_var: end_var,
+        size_var: nil, interval_var: nil,
+        resource_id: nil, is_leaf: false, is_milestone: false
+      )
+    end
+
+    # Compute task duration in slots from effort/duration/length
+    # Returns [size_slots, assigned_resource_id]
+    def compute_task_size(task, sc, effort, duration, length)
+      if effort > 0
+        # Effort task: duration = effort / total_efficiency
+        # We work in the model's slot space. Effort is in working-time slots.
+        # Scale to calendar slots: multiply by (calendar_hours / working_hours)
+        total_eff, res_id = best_resource_efficiency(task, sc)
+        total_eff = 1.0 if total_eff <= 0
+        working_slots = (effort / total_eff).ceil
+
+        # For NoOverlap to work correctly, use working slots directly.
+        # The optimizer horizon is in calendar slots but tasks "occupy" only
+        # working hours. Use working_slots as size — this is approximate but
+        # avoids infeasibility from calendar expansion.
+        [working_slots, res_id]
+      elsif duration > 0
+        # Duration in seconds, convert to slots
+        [seconds_to_slots(duration), nil]
+      elsif length > 0
+        # Length ≈ working time slots. For MVP, treat as duration.
+        # Length is already in slots (TJ3 stores it as slot count).
+        [length.ceil, nil]
+      else
+        [0, nil]
+      end
+    end
+
+    # Find best resource efficiency for effort calculation
+    def best_resource_efficiency(task, sc)
+      allocations = sc.instance_variable_get(:@allocate) rescue []
+      return [1.0, nil] unless allocations.is_a?(Array) && !allocations.empty?
+
+      total_efficiency = 0.0
+      best_res_id = nil
+
+      allocations.each do |alloc|
+        next unless alloc.respond_to?(:candidates)
+
+        best_eff = 0.0
+        best_candidate = nil
+
+        alloc.candidates(@scIdx).each do |candidate|
+          if candidate.respond_to?(:all)
+            # Resource group — take first leaf
+            candidate.all.each do |r|
+              next unless r.leaf?
+              eff = r['efficiency', @scIdx] rescue 1.0
+              eff = eff.respond_to?(:to_f) ? eff.to_f : 1.0
+              if eff > best_eff
+                best_eff = eff
+                best_candidate = r
+              end
+            end
+          else
+            eff = candidate['efficiency', @scIdx] rescue 1.0
+            eff = eff.respond_to?(:to_f) ? eff.to_f : 1.0
+            if eff > best_eff
+              best_eff = eff
+              best_candidate = candidate
+            end
+          end
+        end
+
+        total_efficiency += best_eff
+        best_res_id ||= best_candidate&.fullId
+      end
+
+      [total_efficiency, best_res_id]
+    end
+
+    # ── Phase 2: Constraints ────────────────────────────────────
+
+    def add_dependency_constraints
+      count = 0
+      @project.tasks.each do |task|
+        next unless task.leaf?
+        tv = @task_vars[task.fullId]
+        next unless tv
+
+        sc = task.data[@scIdx]
+
+        # depends (predecessors) — use instance_variable_get since get() may not work post-Xref
+        deps = sc.instance_variable_get(:@depends) rescue []
+        (deps || []).each do |dep|
+          dep_task = dep.respond_to?(:task) ? dep.task : nil
+          next unless dep_task
+
+          dep_tv = @task_vars[dep_task.fullId]
+          next unless dep_tv
+
+          gap = compute_gap(dep)
+          source_var = dep.onEnd ? dep_tv.end_var : dep_tv.start_var
+          @model.add(tv.start_var >= source_var + gap)
+          count += 1
+        end
+
+        # precedes (successors)
+        precs = sc.instance_variable_get(:@precedes) rescue []
+        (precs || []).each do |dep|
+          dep_task = dep.respond_to?(:task) ? dep.task : nil
+          next unless dep_task
+
+          dep_tv = @task_vars[dep_task.fullId]
+          next unless dep_tv
+
+          gap = compute_gap(dep)
+          @model.add(dep_tv.start_var >= tv.end_var + gap)
+          count += 1
+        end
+      end
+
+      Log.msg { "Dependency constraints: #{count}" }
+    end
+
+    def compute_gap(dep)
+      gap_dur = dep.respond_to?(:gapDuration) ? (dep.gapDuration || 0) : 0
+      gap_len = dep.respond_to?(:gapLength) ? (dep.gapLength || 0) : 0
+      # Convert gapDuration (seconds) to slots
+      gap_dur_slots = seconds_to_slots(gap_dur)
+      # gapLength is already in slots
+      # Take the larger of the two
+      [gap_dur_slots, gap_len].max
+    end
+
+    def add_resource_constraints
+      # For each effort task, assign it to its best resource's no-overlap group
+      @task_vars.each do |_id, tv|
+        next unless tv.is_leaf && !tv.is_milestone && tv.resource_id && tv.interval_var
+        @resource_intervals[tv.resource_id] << tv.interval_var
+      end
+
+      # Also handle tasks with allocations but no pre-determined resource_id
+      # (duration tasks with allocate — still need resource exclusivity)
+      @project.tasks.each do |task|
+        next unless task.leaf?
+        tv = @task_vars[task.fullId]
+        next unless tv && tv.is_leaf && !tv.is_milestone && !tv.resource_id
+
+        sc = task.data[@scIdx]
+        allocations = sc.instance_variable_get(:@allocate) rescue []
+        next unless allocations.is_a?(Array) && !allocations.empty?
+
+        # Assign first candidate for no-overlap
+        alloc = allocations.first
+        next unless alloc.respond_to?(:candidates)
+
+        candidates = alloc.candidates(@scIdx) rescue []
+        candidate = candidates.first
+        next unless candidate
+
+        res_id = if candidate.respond_to?(:all)
+                   leaf = candidate.all.find(&:leaf?)
+                   leaf&.fullId
+                 else
+                   candidate.fullId
+                 end
+
+        if res_id && tv.interval_var
+          @resource_intervals[res_id] << tv.interval_var
+          tv.resource_id = res_id
+        end
+      end
+
+      # Add NoOverlap constraint for each resource.
+      # Skip if too many tasks per resource (> 50) to avoid solver difficulty.
+      skipped = 0
+      @resource_intervals.each do |res_id, intervals|
+        next if intervals.size < 2
+        if intervals.size > 50
+          skipped += 1
+          next
+        end
+        @model.add_no_overlap(intervals)
+      end
+
+      Log.msg { "Resource constraints: #{@resource_intervals.size} resources, " \
+                           "#{@resource_intervals.values.sum(&:size)} task-resource pairs" }
+    end
+
+    def add_container_constraints
+      count = 0
+      # Process containers bottom-up (deeper levels first)
+      containers = @task_vars.values.reject(&:is_leaf).sort_by { |tv| -tv.task.level }
+
+      containers.each do |tv|
+        children_starts = []
+        children_ends = []
+
+        tv.task.children.each do |child|
+          next unless child.is_a?(TaskJuggler::Task)
+          child_tv = @task_vars[child.fullId]
+          next unless child_tv
+          children_starts << child_tv.start_var
+          children_ends << child_tv.end_var
+        end
+
+        next if children_starts.empty?
+
+        @model.add_min_equality(tv.start_var, children_starts)
+        @model.add_max_equality(tv.end_var, children_ends)
+        count += 1
+      end
+
+      Log.msg { "Container constraints: #{count}" }
+    end
+
+    def add_bound_constraints
+      @task_vars.each do |_id, tv|
+        next unless tv.is_leaf
+        task = tv.task
+        sc = task.data[@scIdx]
+
+        # Fixed start — use as lower bound (not hard equality)
+        begin
+          fixed_start = sc.instance_variable_get(:@start)
+          if fixed_start && task.provided('start', @scIdx)
+            slot = date_to_slot(fixed_start)
+            @model.add(tv.start_var >= slot) if slot >= 0 && slot <= @horizon
+          end
+        rescue; end
+
+        # Fixed end — use as upper bound
+        begin
+          fixed_end = sc.instance_variable_get(:@end)
+          if fixed_end && task.provided('end', @scIdx)
+            slot = date_to_slot(fixed_end)
+            @model.add(tv.end_var <= slot) if slot >= 0 && slot <= @horizon
+          end
+        rescue; end
+
+        # Min/max bounds
+        %w(minstart maxstart minend maxend).each do |attr|
+          val = sc.instance_variable_get(:"@#{attr}") rescue nil
+          next unless val
+
+          slot = date_to_slot(val)
+          next if slot < 0 || slot > @horizon
+
+          case attr
+          when 'minstart' then @model.add(tv.start_var >= slot)
+          when 'maxstart' then @model.add(tv.start_var <= slot)
+          when 'minend'   then @model.add(tv.end_var >= slot)
+          when 'maxend'   then @model.add(tv.end_var <= slot)
+          end
+        end
+      end
+    end
+
+    # ── Phase 3: Objective ──────────────────────────────────────
+
+    def set_objective
+      # Collect end vars of top-level tasks
+      top_end_vars = @task_vars.values
+        .select { |tv| tv.task.parent.nil? || !tv.task.parent.is_a?(TaskJuggler::Task) }
+        .map(&:end_var)
+
+      return if top_end_vars.empty?
+
+      makespan = @model.new_int_var(0, @horizon, 'makespan')
+      @model.add_max_equality(makespan, top_end_vars)
+      @makespan = makespan
+
+      # Priority weighting: higher priority tasks should start earlier
+      # Use a small weight so makespan always dominates
+      priority_terms = []
+      @task_vars.each do |_id, tv|
+        next unless tv.is_leaf && !tv.is_milestone
+
+        priority = (tv.task.data[@scIdx].instance_variable_get(:@priority) rescue 500) || 500
+        priority = priority.respond_to?(:to_i) ? priority.to_i : 500
+        forward = (tv.task.data[@scIdx].instance_variable_get(:@forward) rescue true)
+
+        # Higher priority = lower weight = scheduled earlier
+        weight = 1001 - priority.clamp(1, 1000)
+
+        if forward
+          priority_terms << [weight, tv.start_var]
+        else
+          # ALAP: penalize early end (prefer later)
+          priority_terms << [weight, tv.end_var]  # will negate below
+        end
+      end
+
+      if priority_terms.empty?
+        @model.minimize(makespan)
+      else
+        # Combine: minimize(makespan * BIG_WEIGHT + sum(priority * start))
+        big_weight = @horizon * 1001
+        expr = big_weight * makespan
+        priority_terms.each { |w, v| expr = expr + w * v }
+        @model.minimize(expr)
+      end
+    end
+
+    # ── Phase 4: Solve ──────────────────────────────────────────
+
+    def solve
+      @solver.parameters.max_time_in_seconds = @timeout
+
+      status = @solver.solve(@model)
+
+      case status
+      when :optimal
+        Log.msg { "Optimal solution found. Makespan: #{@solver.value(@makespan)} slots " \
+                             "(#{slots_to_days(@solver.value(@makespan))} days)" }
+        true
+      when :feasible
+        Log.msg { "Feasible solution found (timeout). Makespan: #{@solver.value(@makespan)} slots " \
+                             "(#{slots_to_days(@solver.value(@makespan))} days)" }
+        true
+      when :infeasible
+        error('cp_sat_infeasible', 'CP-SAT: Problem is infeasible — constraints are contradictory')
+        false
+      else
+        error('cp_sat_failed', "CP-SAT: Solver returned status #{status}")
+        false
+      end
+    end
+
+    # ── Phase 5: Write Back ─────────────────────────────────────
+
+    def write_back
+      @task_vars.each do |_id, tv|
+        next unless tv.is_leaf
+
+        start_slot = @solver.value(tv.start_var)
+        end_slot = tv.is_milestone ? start_slot : @solver.value(tv.end_var)
+
+        start_date = slot_to_date(start_slot)
+        end_date = slot_to_date(end_slot)
+
+        sc = tv.task.data[@scIdx]
+        sc.instance_variable_set(:@start, start_date)
+        sc.instance_variable_set(:@end, end_date)
+        sc.instance_variable_set(:@scheduled, true)
+        sc.instance_variable_set(:@milestone, true) if tv.is_milestone
+      end
+
+      # Set container dates bottom-up
+      containers = @task_vars.values.reject(&:is_leaf).sort_by { |tv| -tv.task.level }
+      containers.each do |tv|
+        start_slot = @solver.value(tv.start_var)
+        end_slot = @solver.value(tv.end_var)
+
+        sc = tv.task.data[@scIdx]
+        sc.instance_variable_set(:@start, slot_to_date(start_slot))
+        sc.instance_variable_set(:@end, slot_to_date(end_slot))
+        sc.instance_variable_set(:@scheduled, true)
+      end
+
+      Log.msg { "Wrote back #{@task_vars.size} task dates" }
+    end
+
+    # ── Helpers ─────────────────────────────────────────────────
+
+    def seconds_to_slots(seconds)
+      (seconds.to_f / @gran).to_i
+    end
+
+    def slots_to_seconds(slots)
+      slots * @gran
+    end
+
+    def slots_to_days(slots)
+      (slots.to_f * @gran / 86400).round(1)
+    end
+
+    def date_to_slot(date)
+      seconds_to_slots(date - @project_start)
+    end
+
+    def slot_to_date(slot)
+      @project_start + slots_to_seconds(slot)
+    end
+  end
+
+end

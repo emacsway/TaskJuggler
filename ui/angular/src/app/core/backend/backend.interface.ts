@@ -80,6 +80,7 @@ export abstract class TjBackend {
   // Engine operations
   abstract parse(sessionId: string, masterFile: string): Observable<ParseResult>;
   abstract schedule(sessionId: string): Observable<ScheduleResult>;
+  abstract optimize(sessionId: string, timeout?: number): Observable<ScheduleResult>;
   abstract scheduleWithProgress(sessionId: string): Observable<ScheduleProgress>;
   abstract getMessages(sessionId: string): Observable<DiagnosticMessage[]>;
 
