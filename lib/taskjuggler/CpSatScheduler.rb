@@ -62,6 +62,8 @@ class TaskJuggler
       build_variables
       add_dependency_constraints
       add_resource_constraints
+      add_leave_constraints
+      finalize_resource_no_overlap
       add_container_constraints
       add_bound_constraints
       add_warm_start_hints
@@ -130,9 +132,13 @@ class TaskJuggler
         end
       end
 
+      # For effort tasks, allow size to stretch to accommodate leaves
+      max_leave_slots = max_resource_leave_slots(task, sc)
+      max_size = size_slots + max_leave_slots
+
       start_var = @model.new_int_var(0, @horizon, "#{id}_start")
       end_var = @model.new_int_var(0, @horizon, "#{id}_end")
-      size_var = @model.new_int_var(size_slots, size_slots, "#{id}_size")
+      size_var = @model.new_int_var(size_slots, max_size, "#{id}_size")
       interval = @model.new_interval_var(start_var, size_var, end_var, "#{id}_interval")
 
       @task_vars[id] = TaskVars.new(
@@ -322,15 +328,25 @@ class TaskJuggler
         end
       end
 
-      # Add NoOverlap constraint for each resource
+      Log.msg { "Resource assignments: #{@resource_intervals.size} resources, " \
+                "#{@resource_intervals.values.sum(&:size)} intervals, " \
+                "#{alt_count} alternative choices" }
+    end
+
+    # Called after add_leave_constraints to finalize resource constraints
+    def finalize_resource_no_overlap
       @resource_intervals.each do |res_id, intervals|
         next if intervals.size < 2
         @model.add_no_overlap(intervals)
       end
+    end
 
-      Log.msg { "Resource constraints: #{@resource_intervals.size} resources, " \
-                "#{@resource_intervals.values.sum(&:size)} intervals, " \
-                "#{alt_count} alternative choices" }
+    # Per-resource leaves are accounted for by:
+    # 1. Universal holidays excluded from global working time map
+    # 2. Flexible task sizes (min=effort, max=effort+leaves) allow tasks to
+    #    stretch when scheduled around leave periods
+    def add_leave_constraints
+      # No explicit constraints needed — handled by working time map + flexible sizes
     end
 
     def add_container_constraints
@@ -543,22 +559,54 @@ class TaskJuggler
     # working_to_calendar[i] = calendar slot index for i-th working slot
     # calendar_to_working[j] = working slot index for calendar slot j (or nil if non-working)
     def build_working_time_map
-      @working_to_calendar = []
-      @calendar_to_working = Array.new(@calendar_horizon)
-
       wh = @project['workinghours']
       days = wh.instance_variable_get(:@days) rescue nil
 
-      unless days
-        # Fallback: all slots are working
-        @calendar_horizon.times { |i| @working_to_calendar << i; @calendar_to_working[i] = i }
-        return
+      # Step 1: Collect all leave calendar slots per resource
+      resource_cal_leaves = {}
+      @project.resources.each do |resource|
+        next unless resource.leaf?
+        sc = resource.data[@scIdx] rescue nil
+        next unless sc
+        leaves = sc.instance_variable_get(:@leaves) rescue nil
+        next unless leaves.is_a?(Array) && !leaves.empty?
+
+        blocked = Set.new
+        leaves.each do |leave|
+          interval = leave.interval rescue nil
+          next unless interval
+          cal_start = ((interval.start - @project_start).to_f / @gran).to_i.clamp(0, @calendar_horizon - 1)
+          cal_end = ((interval.end - @project_start).to_f / @gran).to_i.clamp(0, @calendar_horizon)
+          (cal_start...cal_end).each { |cs| blocked.add(cs) }
+        end
+        resource_cal_leaves[resource.fullId] = blocked if blocked.any?
       end
 
+      # Step 2: Find universal holidays (shared by ALL resources that have leaves)
+      universal_holidays = Set.new
+      if resource_cal_leaves.size > 1
+        universal_holidays = resource_cal_leaves.values.reduce(:&) || Set.new
+      elsif resource_cal_leaves.size == 1
+        universal_holidays = resource_cal_leaves.values.first
+      end
+
+      # Step 3: Build working time map excluding weekends + universal holidays
+      @working_to_calendar = []
+      @calendar_to_working = Array.new(@calendar_horizon)
+
       @calendar_horizon.times do |cal_slot|
+        # Skip universal holidays
+        next if universal_holidays.include?(cal_slot)
+
+        unless days
+          @calendar_to_working[cal_slot] = @working_to_calendar.size
+          @working_to_calendar << cal_slot
+          next
+        end
+
         time = @project_start + cal_slot * @gran
         t = Time.at(time.to_i)
-        dow = t.wday  # 0=Sun
+        dow = t.wday
         hour_sec = t.hour * 3600 + t.min * 60
 
         is_working = false
@@ -574,6 +622,35 @@ class TaskJuggler
           @working_to_calendar << cal_slot
         end
       end
+
+      # Step 4: Build per-resource non-universal leave sets (in working slots)
+      @resource_leave_wslots = {}
+      resource_cal_leaves.each do |rid, cal_slots|
+        personal = cal_slots - universal_holidays
+        next if personal.empty?
+        ws_blocked = Set.new
+        personal.each { |cs| ws = @calendar_to_working[cs]; ws_blocked.add(ws) if ws }
+        @resource_leave_wslots[rid] = ws_blocked if ws_blocked.any?
+      end
+    end
+
+    # Max leave working slots across all candidate resources for a task
+    def max_resource_leave_slots(task, sc)
+      allocations = sc.instance_variable_get(:@allocate) rescue []
+      return 0 unless allocations.is_a?(Array)
+
+      max_leaves = 0
+      allocations.each do |alloc|
+        next unless alloc.respond_to?(:candidates)
+        (alloc.candidates(@scIdx) rescue []).each do |c|
+          rids = c.respond_to?(:all) ? c.all.select(&:leaf?).map(&:fullId) : [c.fullId]
+          rids.each do |rid|
+            ls = @resource_leave_wslots[rid]
+            max_leaves = [max_leaves, ls&.size || 0].max
+          end
+        end
+      end
+      max_leaves
     end
 
     def seconds_to_slots(seconds)
