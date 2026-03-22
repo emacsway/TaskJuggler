@@ -139,12 +139,35 @@ const OPS_BY_TYPE: Record<string, { key: string; label: string }[]> = {
                   <option value="false">No</option>
                 </select>
               } @else if (child.field === 'ischildof') {
-                <select [(ngModel)]="child.value" (ngModelChange)="apply()" class="filter-select val-select-wide">
-                  <option value="">-- select --</option>
-                  @for (t of containerTasks(); track t.taskId) {
-                    <option [value]="t.taskId">{{ t.name }} ({{ t.taskId }})</option>
+                <div class="childof-picker">
+                  <input class="filter-input childof-input"
+                         [ngModel]="childofSearch()"
+                         (ngModelChange)="childofSearch.set($event)"
+                         (focus)="childofOpen.set(true)"
+                         placeholder="Type to filter..."
+                  />
+                  @if (child.value) {
+                    <span class="childof-selected" (click)="child.value = ''; apply()">
+                      {{ child.value }} &times;
+                    </span>
                   }
-                </select>
+                  @if (childofOpen()) {
+                    <div class="childof-dropdown">
+                      @for (t of filteredContainers(); track t.taskId) {
+                        <div class="childof-item"
+                             [class.selected]="child.value === t.taskId"
+                             [style.padding-left.px]="t.level * 12 + 6"
+                             (mousedown)="selectChildof(child, t.taskId)">
+                          {{ t.name }}
+                          <span class="childof-id">{{ t.taskId }}</span>
+                        </div>
+                      }
+                      @if (filteredContainers().length === 0) {
+                        <div class="childof-empty">No matches</div>
+                      }
+                    </div>
+                  }
+                </div>
               } @else {
                 <input
                   class="filter-input"
@@ -215,6 +238,29 @@ const OPS_BY_TYPE: Record<string, { key: string; label: string }[]> = {
     .field-select { width: 120px; }
     .op-select { width: 85px; }
     .val-select, .filter-input { width: 120px; }
+    .childof-picker { position: relative; }
+    .childof-input { width: 180px; }
+    .childof-selected {
+      font-size: 10px; color: var(--accent-color); cursor: pointer;
+      margin-left: 2px;
+      &:hover { text-decoration: line-through; }
+    }
+    .childof-dropdown {
+      position: absolute; top: 100%; left: 0; z-index: 20;
+      width: 320px; max-height: 200px; overflow-y: auto;
+      background: var(--bg-secondary); border: 1px solid var(--border-color);
+      border-radius: 3px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      margin-top: 2px;
+    }
+    .childof-item {
+      padding: 3px 6px; font-size: 11px; cursor: pointer;
+      color: var(--text-primary); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+      &:hover { background: var(--bg-hover); }
+      &.selected { background: var(--bg-active); color: var(--accent-color); }
+    }
+    .childof-id { color: var(--text-muted); font-size: 10px; margin-left: 4px; font-family: monospace; }
+    .childof-empty { padding: 8px; font-size: 11px; color: var(--text-muted); text-align: center; }
     .val-select-wide { width: 200px; }
     .remove-btn {
       background: none; border: none; color: var(--text-muted);
@@ -242,15 +288,33 @@ export class GanttFilterComponent {
   private nextId = 1;
   root: FilterGroup = { type: 'group', id: this.nextId++, logic: 'and', children: [], negate: false };
 
+  childofSearch = signal('');
+  childofOpen = signal(true);
+
   constructor(private project: ProjectStateService) {}
 
-  /** Container tasks for ischildof dropdown */
   containerTasks = computed(() => {
     const data = this.project.ganttData();
     return data?.tasks.filter(t => t.isContainer) || [];
   });
 
+  filteredContainers = computed(() => {
+    const all = this.containerTasks();
+    const q = this.childofSearch().toLowerCase();
+    if (!q) return all;
+    return all.filter(t =>
+      t.name.toLowerCase().includes(q) || t.taskId.toLowerCase().includes(q)
+    );
+  });
+
   activeCount = computed(() => this.countRules(this.root));
+
+  selectChildof(rule: FilterRule, taskId: string): void {
+    rule.value = taskId;
+    this.childofSearch.set('');
+    this.childofOpen.set(false);
+    this.apply();
+  }
 
   countRules(group: FilterGroup): number {
     let n = 0;
