@@ -28,6 +28,7 @@ class TaskJuggler
         'hasalert' => 1,
         'isactive' => 1,
         'ischildof' => 1,
+        'dependson' => 2,
         'isdependencyof' => 3,
         'isdutyof' => 2,
         'isfeatureof' => 2,
@@ -128,6 +129,25 @@ class TaskJuggler
       return false unless (parent = property.propertySet[args[0]])
 
       property.isChildOf?(parent)
+    end
+
+    # Returns true if the current task depends on the specified task.
+    # Usage: dependson(task_id, scenario)
+    # e.g. hidetask ~dependson(deliveries.sprint_63, fact)
+    def dependson(expr, args)
+      property = properties(expr)[0]
+      return false unless property.is_a?(Task)
+      project = property.project
+      # 1st arg: task ID that the current task should depend on
+      return false if (target = project.task(args[0])).nil?
+      # 2nd arg: scenario index
+      return false if (scenarioIdx = project.scenarioIdx(args[1])).nil?
+
+      # Check if target is in the depends list of the current task
+      deps = property.data[scenarioIdx].instance_variable_get(:@depends) rescue []
+      return false unless deps.is_a?(Array)
+
+      deps.any? { |d| d.respond_to?(:task) && d.task == target }
     end
 
     def isdependencyof(expr, args)
