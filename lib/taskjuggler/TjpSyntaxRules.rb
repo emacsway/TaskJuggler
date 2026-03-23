@@ -697,6 +697,27 @@ EOT
     pattern(%w( !columnId !columnBody ), lambda {
       @val[0]
     })
+    pattern(%w( !columnExprId !columnBody ), lambda {
+      @val[0]
+    })
+  end
+
+  def rule_columnExprId
+    pattern(%w( $STRING ), lambda {
+      require 'taskjuggler/ArithExpression'
+      expr_str = @val[0]
+      begin
+        expr = ArithExprParser.new(expr_str).parse
+        @column = TableColumnDefinition.new("expr_#{expr_str.hash.abs}",
+                                             expr_str)
+        @column.expression = expr
+        @column
+      rescue => e
+        error('bad_column_expr',
+              "Invalid column expression '#{expr_str}': #{e.message}",
+              @sourceFileInfo[0])
+      end
+    })
   end
 
   def rule_columnId
