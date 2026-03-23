@@ -235,9 +235,11 @@ class TaskJuggler
           a('scenarios').each do |scenarioIdx|
             query.scenarioIdx = scenarioIdx
 
-            if columnDescr.expression.is_a?(TaskJuggler::ArithAggregate)
-              # Aggregate: evaluate across all visible properties
-              val = columnDescr.expression.eval_aggregate(query, propertyList)
+            expr = columnDescr.expression
+            if expr.is_a?(TaskJuggler::ArithAggregate) ||
+               (expr.respond_to?(:aggregate?) && expr.aggregate?)
+              # Aggregate (possibly wrapped in round): evaluate across all visible properties
+              val = expr.eval_aggregate(query, propertyList)
               @table[idx] << val
             else
               # Per-task expression (use first property or nil)

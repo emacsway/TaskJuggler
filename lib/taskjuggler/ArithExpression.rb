@@ -117,12 +117,47 @@ class TaskJuggler
     end
   end
 
+  # Round function: round(expr) or round(expr, digits)
+  class ArithRound < ArithExpr
+    attr_reader :inner
+
+    def initialize(inner, digits = 0)
+      @inner = inner
+      @digits = digits
+    end
+
+    def eval_for(query)
+      val = @inner.eval_for(query)
+      val.round(@digits)
+    end
+
+    # Delegate aggregate evaluation if inner is an aggregate
+    def eval_aggregate(query, property_list)
+      if @inner.respond_to?(:eval_aggregate)
+        val = @inner.eval_aggregate(query, property_list)
+        val ? val.round(@digits) : nil
+      else
+        nil
+      end
+    end
+
+    # Check if this contains an aggregate
+    def aggregate?
+      @inner.is_a?(ArithAggregate) ||
+        (@inner.respond_to?(:aggregate?) && @inner.aggregate?)
+    end
+
+    def to_s
+      @digits > 0 ? "round(#{@inner}, #{@digits})" : "round(#{@inner})"
+    end
+  end
+
   # Parser for arithmetic expressions.
   # Grammar:
   #   expr     := term (('+' | '-') term)*
   #   term     := factor (('*' | '/') factor)*
   #   factor   := NUMBER | IDENTIFIER | func_call | '(' expr ')'
-  #   func_call := ('sum'|'avg'|'count'|'min'|'max') '(' expr ')'
+  #   func_call := ('sum'|'avg'|'count'|'min'|'max'|'round') '(' expr [',' expr] ')'
   class ArithExprParser
     AGGREGATE_FUNCS = %w[sum avg count min max].freeze
 
@@ -217,6 +252,20 @@ class TaskJuggler
           inner = parse_expr
           consume(')')
           ArithAggregate.new(name, inner)
+        elsif name == 'round'
+          consume('(')
+          inner = parse_expr
+          digits = 0
+          if current == ','
+            consume(',')
+            dig_tok = current
+            if dig_tok.is_a?(Array) && dig_tok[0] == :num
+              consume
+              digits = dig_tok[1].to_i
+            end
+          end
+          consume(')')
+          ArithRound.new(inner, digits)
         else
           ArithAttributeRef.new(name)
         end
