@@ -326,6 +326,17 @@ class Tj3App < Sinatra::Base
     json result
   end
 
+  # Batch column query — get column values for all tasks
+  post '/api/sessions/:id/columns' do
+    session = find_session!(params[:id])
+    halt 409, json(error: 'Project not scheduled yet') unless session.scheduled?
+    data = request_json
+    columns = data['columns'] || []
+    scenario = data['scenario']
+    result = session.query_columns(columns, scenario)
+    json result
+  end
+
   # ── Reports ─────────────────────────────────────────────────────
 
   # List reports

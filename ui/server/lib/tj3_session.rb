@@ -176,6 +176,38 @@ class Tj3Session
     result || { error: 'Monte Carlo failed' }
   end
 
+  def query_columns(columns, scenario = nil)
+    scenario_idx = resolve_scenario_idx(scenario)
+    result = {}
+
+    @project.tasks.each do |task|
+      row = {}
+
+      columns.each do |col|
+        query = TaskJuggler::Query.new(
+          'project' => @project,
+          'property' => task,
+          'propertyType' => :Task,
+          'attributeId' => col,
+          'scenarioIdx' => scenario_idx,
+          'start' => @project['start'],
+          'end' => @project['end'],
+          'loadUnit' => :days,
+          'numberFormat' => @project['numberFormat'],
+          'timeFormat' => '%Y-%m-%d'
+        )
+        query.process
+        row[col] = query.ok ? query.to_s : nil
+      rescue
+        row[col] = nil
+      end
+
+      result[task.fullId] = row
+    end
+
+    result
+  end
+
   def schedule_with_progress(&block)
     return unless parsed?
 

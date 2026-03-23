@@ -109,6 +109,7 @@ export abstract class TjBackend {
   abstract getAccounts(sessionId: string): Observable<Account[]>;
   abstract getScenarios(sessionId: string): Observable<Scenario[]>;
   abstract getGanttData(sessionId: string, scenario?: string): Observable<GanttData>;
+  abstract queryColumns(sessionId: string, columns: string[], scenario?: string): Observable<Record<string, Record<string, string | null>>>;
   abstract query(sessionId: string, request: QueryRequest): Observable<QueryResult>;
 
   // Syntax reference

@@ -161,6 +161,14 @@ export class HttpBackendService extends TjBackend {
     return this.http.get<Scenario[]>(`${this.baseUrl}/sessions/${sessionId}/scenarios`);
   }
 
+  queryColumns(sessionId: string, columns: string[], scenario?: string): Observable<Record<string, Record<string, string | null>>> {
+    const body: any = { columns };
+    if (scenario) body.scenario = scenario;
+    return this.http.post<Record<string, Record<string, string | null>>>(
+      `${this.baseUrl}/sessions/${sessionId}/columns`, body
+    );
+  }
+
   getGanttData(sessionId: string, scenario?: string): Observable<GanttData> {
     const params: Record<string, string> = {};
     if (scenario) params['scenario'] = scenario;

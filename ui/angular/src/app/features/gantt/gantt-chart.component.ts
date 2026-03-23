@@ -54,6 +54,20 @@ const ZOOM_LEVELS = [
                   title="Compare Standard vs Optimized schedule">
             {{ compareLoading() ? 'Comparing...' : compareMode() ? 'Hide Compare' : 'Compare' }}
           </button>
+          <span class="toolbar-sep"></span>
+          <span class="toolbar-label">Columns:</span>
+          <select class="toolbar-select" (change)="addColumn($event)">
+            <option value="">+ Add...</option>
+            @for (col of availableColumns; track col) {
+              <option [value]="col">{{ col }}</option>
+            }
+          </select>
+          @for (col of extraColumns(); track col.name; let i = $index) {
+            <span class="col-tag">
+              {{ col.name }}
+              <span class="col-tag-remove" (click)="removeColumn(i)">&times;</span>
+            </span>
+          }
         </div>
 
         <app-gantt-filter (filterChanged)="onFilterChanged($event)"></app-gantt-filter>
@@ -66,6 +80,12 @@ const ZOOM_LEVELS = [
                 <span>Task</span>
                 <div class="label-resize-handle" (mousedown)="startLabelResize($event)"></div>
               </div>
+              @for (col of extraColumns(); track col.name; let i = $index) {
+                <div class="header-col-extra" [style.width.px]="col.width">
+                  {{ col.name }}
+                  <div class="col-resize-handle" (mousedown)="startColResize($event, i)"></div>
+                </div>
+              }
               <div class="header-timeline">
                 @for (label of timeLabels(); track label.x) {
                   <div class="time-label" [style.left.px]="label.x">{{ label.text }}</div>
@@ -77,7 +97,7 @@ const ZOOM_LEVELS = [
             <div class="gantt-body">
               <!-- Grid lines -->
               @for (label of timeLabels(); track label.x) {
-                <div class="grid-line" [style.left.px]="label.x + labelWidth()"></div>
+                <div class="grid-line" [style.left.px]="label.x + totalFixedWidth()"></div>
               }
 
               <!-- Now line -->
@@ -118,12 +138,15 @@ const ZOOM_LEVELS = [
                     </span>
                     {{ task.name }}
                   </div>
+                  @for (col of extraColumns(); track col.name) {
+                    <div class="row-col-extra" [style.width.px]="col.width">{{ getColumnValue(task.taskId, col.name) }}</div>
+                  }
                   <div class="gantt-row-bar">
                     <!-- Ghost bar (standard schedule) for comparison -->
                     @if (compareMode() && getStdTask(task.taskId); as std) {
                       @if (!task.isMilestone) {
                         <div class="ghost-bar"
-                             [style.left.px]="dateToX(std.start) - labelWidth()"
+                             [style.left.px]="dateToX(std.start) - totalFixedWidth()"
                              [style.width.px]="ghostBarWidth(std)"
                              [title]="'Standard: ' + (std.start | slice:0:10) + ' - ' + (std.end | slice:0:10)"
                         ></div>
@@ -133,7 +156,7 @@ const ZOOM_LEVELS = [
                     @if (task.isMilestone) {
                       <div
                         class="milestone"
-                        [style.left.px]="dateToX(task.start) - labelWidth()"
+                        [style.left.px]="dateToX(task.start) - totalFixedWidth()"
                         [title]="task.name + ' (' + (task.start | slice:0:10) + ')'"
                       ></div>
                     } @else {
@@ -142,7 +165,7 @@ const ZOOM_LEVELS = [
                         [class.container]="task.isContainer"
                         [class.improved]="compareMode() && isImproved(task)"
                         [class.worsened]="compareMode() && isWorsened(task)"
-                        [style.left.px]="dateToX(task.start) - labelWidth()"
+                        [style.left.px]="dateToX(task.start) - totalFixedWidth()"
                         [style.width.px]="barWidth(task)"
                         [title]="compareMode() ? compareTooltip(task) : barTooltip(task)"
                       >
@@ -178,6 +201,29 @@ const ZOOM_LEVELS = [
       &:focus { outline: 1px solid var(--accent-color); }
     }
     .toolbar-sep { width: 1px; height: 16px; background: var(--border-color); margin: 0 4px; }
+    .col-tag {
+      font-size: 10px; padding: 1px 4px; border-radius: 3px;
+      background: var(--bg-active); color: var(--accent-color);
+    }
+    .col-tag-remove { cursor: pointer; margin-left: 2px; &:hover { color: var(--error-color); } }
+    .header-col-extra {
+      flex-shrink: 0; font-size: 10px; font-weight: 600;
+      color: var(--text-secondary); text-transform: uppercase;
+      padding: 6px 4px; border-left: 1px solid var(--border-color);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      position: relative;
+    }
+    .col-resize-handle {
+      position: absolute; right: -3px; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; z-index: 5;
+      &:hover { background: var(--accent-color); opacity: 0.5; }
+    }
+    .row-col-extra {
+      flex-shrink: 0; font-size: 11px; color: var(--text-secondary);
+      padding: 0 4px; line-height: 28px; border-left: 1px solid var(--border-color);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      background: var(--bg-primary); position: relative; z-index: 2;
+    }
     .zoom-label { font-size: 11px; color: var(--text-secondary); margin-right: 4px; }
     .zoom-btn {
       padding: 2px 8px; font-size: 11px;
@@ -203,7 +249,7 @@ const ZOOM_LEVELS = [
       cursor: col-resize; z-index: 5;
       &:hover { background: var(--accent-color); opacity: 0.5; }
     }
-    .header-timeline { flex: 1; position: relative; }
+    .header-timeline { flex: 1; position: relative; overflow: hidden; }
     .time-label {
       position: absolute; top: 0; font-size: 10px; color: var(--text-secondary);
       padding: 6px 4px; border-left: 1px solid var(--border-color); white-space: nowrap;
@@ -290,6 +336,20 @@ export class GanttChartComponent {
   private filterFn = signal<(task: GanttTask) => boolean>(() => true);
   readonly collapsed = signal(new Set<string>());
 
+  // Extra columns: {name, width}
+  readonly extraColumns = signal<{name: string; width: number}[]>([]);
+  private columnData = new Map<string, Record<string, string | null>>();
+  private resizingCol = -1;
+  private colResizeStartX = 0;
+  private colResizeStartW = 0;
+  readonly availableColumns = [
+    'effort', 'effortdone', 'effortleft', 'duration', 'complete',
+    'priority', 'start', 'end', 'responsible', 'resources',
+    'cost', 'revenue', 'stdev', 'stdevleft', 'status',
+    'criticalness', 'pathcriticalness', 'id', 'wbs', 'flags',
+    'note', 'scheduling', 'gauge',
+  ];
+
   // Compare mode
   readonly compareMode = signal(false);
   readonly compareLoading = signal(false);
@@ -320,6 +380,48 @@ export class GanttChartComponent {
 
   onFilterChanged(fn: (task: GanttTask) => boolean): void {
     this.filterFn.set(fn);
+  }
+
+  addColumn(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    const col = select.value;
+    select.value = '';
+    if (!col || this.extraColumns().some(c => c.name === col)) return;
+
+    this.extraColumns.update(cols => [...cols, { name: col, width: 80 }]);
+    this.loadColumnData([col]);
+  }
+
+  removeColumn(index: number): void {
+    this.extraColumns.update(cols => cols.filter((_, i) => i !== index));
+  }
+
+  startColResize(event: MouseEvent, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.resizingCol = index;
+    this.colResizeStartX = event.clientX;
+    this.colResizeStartW = this.extraColumns()[index].width;
+  }
+
+  getColumnValue(taskId: string, col: string): string {
+    return this.columnData.get(taskId)?.[col] || '';
+  }
+
+  private loadColumnData(columns: string[]): void {
+    const sid = this.project.sessionId();
+    if (!sid) return;
+    const scenario = this.ui.activeScenario() || undefined;
+
+    this.backend.queryColumns(sid, columns, scenario).subscribe({
+      next: (data) => {
+        // Merge into existing column data
+        for (const [taskId, cols] of Object.entries(data)) {
+          const existing = this.columnData.get(taskId) || {};
+          this.columnData.set(taskId, { ...existing, ...cols });
+        }
+      },
+    });
   }
 
   switchScenario(scenarioId: string): void {
@@ -426,14 +528,23 @@ export class GanttChartComponent {
 
   @HostListener('document:mousemove', ['$event'])
   onMouseMove(event: MouseEvent): void {
-    if (!this.draggingLabel) return;
-    const newWidth = Math.max(100, this.dragStartWidth + (event.clientX - this.dragStartX));
-    this.labelWidth.set(newWidth);
+    if (this.draggingLabel) {
+      const newWidth = Math.max(100, this.dragStartWidth + (event.clientX - this.dragStartX));
+      this.labelWidth.set(newWidth);
+    } else if (this.resizingCol >= 0) {
+      const newWidth = Math.max(40, this.colResizeStartW + (event.clientX - this.colResizeStartX));
+      this.extraColumns.update(cols => {
+        const updated = [...cols];
+        updated[this.resizingCol] = { ...updated[this.resizingCol], width: newWidth };
+        return updated;
+      });
+    }
   }
 
   @HostListener('document:mouseup')
   onMouseUp(): void {
     this.draggingLabel = false;
+    this.resizingCol = -1;
   }
 
   navigateToSource(task: GanttTask): void {
@@ -489,11 +600,15 @@ export class GanttChartComponent {
 
   ganttData = computed(() => this.project.ganttData());
 
+  totalFixedWidth = computed(() =>
+    this.labelWidth() + this.extraColumns().reduce((sum, c) => sum + c.width, 0)
+  );
+
   chartWidth = computed(() => {
     const data = this.ganttData();
     if (!data) return 800;
     const days = this.daysBetween(data.projectStart, data.projectEnd);
-    return Math.max(800, this.labelWidth() + days * this.ppd());
+    return Math.max(800, this.totalFixedWidth() + days * this.ppd());
   });
 
   nowPosition = computed(() => {
@@ -563,7 +678,7 @@ export class GanttChartComponent {
   dateToX(dateStr: string): number {
     const data = this.ganttData();
     if (!data) return 0;
-    return this.labelWidth() + this.daysBetween(data.projectStart, dateStr) * this.ppd();
+    return this.totalFixedWidth() + this.daysBetween(data.projectStart, dateStr) * this.ppd();
   }
 
   barWidth(task: GanttTask): number {
