@@ -98,7 +98,7 @@ export abstract class TjBackend {
   abstract schedule(sessionId: string): Observable<ScheduleResult>;
   abstract optimize(sessionId: string, timeout?: number): Observable<ScheduleResult>;
   abstract scheduleWithProgress(sessionId: string): Observable<ScheduleProgress>;
-  abstract monteCarlo(sessionId: string, numRuns?: number, taskIds?: string[]): Observable<MonteCarloResult>;
+  abstract monteCarlo(sessionId: string, numRuns?: number, taskIds?: string[], scenario?: string): Observable<MonteCarloResult>;
   abstract compareSchedules(sessionId: string, masterFile: string, scenario?: string): Observable<CompareResult>;
   abstract getMessages(sessionId: string): Observable<DiagnosticMessage[]>;
 

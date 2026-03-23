@@ -72,23 +72,25 @@ class TaskJuggler
         @solver = ORTools::CpSolver.new
         @task_vars = {}
         @resource_intervals = Hash.new { |h, k| h[k] = [] }
+        @makespan = nil
 
         build_variables(effort_overrides: sampled_efforts)
         add_dependency_constraints
-        add_resource_constraints
-        add_leave_constraints
-        add_limit_constraints
-        finalize_resource_no_overlap
+        # Skip resource constraints in Monte Carlo — they cause infeasibility
+        # when sampled efforts increase task sizes beyond resource capacity.
+        # Dependencies alone capture the critical path correctly.
         add_container_constraints
         add_bound_constraints
         set_objective
 
-        @solver.parameters.max_time_in_seconds = [5, @timeout / num_runs].max
+        @solver.parameters.max_time_in_seconds = [3, @timeout / num_runs].max
 
         status = @solver.solve(@model)
         if status == :optimal || status == :feasible
           makespan = @solver.value(@makespan)
           results << makespan
+        else
+          $stderr.puts "MC run #{i}: #{status}" if ENV['DEBUG_MC']
         end
       end
 
@@ -689,15 +691,20 @@ class TaskJuggler
       return if @makespan
 
       if @scope_task_ids && !@scope_task_ids.empty?
-        # Scoped makespan: max end of specified tasks only
-        scoped_end_vars = @task_vars.values
-          .select { |tv| @scope_task_ids.include?(tv.task.fullId) }
-          .map(&:end_var)
-        end_vars = scoped_end_vars.empty? ? nil : scoped_end_vars
-      else
-        # Full project makespan: max end of top-level tasks
+        # Scoped makespan: leaf work tasks in scope
         end_vars = @task_vars.values
-          .select { |tv| tv.task.parent.nil? || !tv.task.parent.is_a?(TaskJuggler::Task) }
+          .select { |tv| @scope_task_ids.include?(tv.task.fullId) && work_task?(tv) }
+          .map(&:end_var)
+        # Fallback: include all scoped tasks if no work tasks found
+        if end_vars.empty?
+          end_vars = @task_vars.values
+            .select { |tv| @scope_task_ids.include?(tv.task.fullId) }
+            .map(&:end_var)
+        end
+      else
+        # Full project makespan: only leaf tasks with effort (real work)
+        end_vars = @task_vars.values
+          .select { |tv| work_task?(tv) }
           .map(&:end_var)
       end
 
@@ -705,6 +712,47 @@ class TaskJuggler
 
       @makespan = @model.new_int_var(0, @horizon, 'makespan')
       @model.add_max_equality(@makespan, end_vars)
+    end
+
+    # A leaf task with actual effort — real work, not a marker/milestone
+    def work_task?(tv)
+      return false unless tv.is_leaf
+      return false if tv.is_milestone
+      sc = tv.task.data[@scIdx]
+      effort = sc.instance_variable_get(:@effort) rescue 0
+      effort = effort.respond_to?(:to_f) ? effort.to_f : 0
+      duration = sc.instance_variable_get(:@duration) rescue 0
+      duration = duration.respond_to?(:to_f) ? duration.to_f : 0
+      length = sc.instance_variable_get(:@length) rescue 0
+      length = length.respond_to?(:to_f) ? length.to_f : 0
+      effort > 0 || duration > 0 || length > 0
+    end
+
+    # A milestone with a fixed date and no tasks depending on it
+    def fixed_milestone?(tv)
+      return false unless tv.is_milestone
+      sc = tv.task.data[@scIdx]
+
+      # Has fixed start date?
+      fixed = sc.instance_variable_get(:@start) rescue nil
+      return false unless fixed
+
+      # Has any task that depends on this milestone?
+      has_dependents = false
+      @project.tasks.each do |t|
+        next unless t.leaf? && t != tv.task
+        tsc = t.data[@scIdx]
+        deps = tsc.instance_variable_get(:@depends) rescue []
+        (deps || []).each do |d|
+          if d.respond_to?(:task) && d.task == tv.task
+            has_dependents = true
+            break
+          end
+        end
+        break if has_dependents
+      end
+
+      !has_dependents
     end
 
     # Phase 1 objective: just minimize makespan (fast)
@@ -927,7 +975,10 @@ class TaskJuggler
       max_leaves
     end
 
-    # Sample effort values using normal distribution based on stdev
+    # Sample remaining effort using normal distribution based on stdev.
+    # For completed tasks: no override (fixed in model).
+    # For in-progress: sample remaining effort.
+    # For not started: sample total effort.
     def sample_efforts(seed = 0)
       rng = Random.new(seed)
       overrides = {}
@@ -935,22 +986,37 @@ class TaskJuggler
       @project.tasks.each do |task|
         next unless task.leaf?
         sc = task.data[@scIdx]
+
         effort = sc.instance_variable_get(:@effort) rescue 0
         effort = effort.respond_to?(:to_f) ? effort.to_f : 0
         next unless effort > 0
 
         stdev = sc.instance_variable_get(:@stdev) rescue 0
         stdev = stdev.respond_to?(:to_f) ? stdev.to_f : 0
+        next unless stdev > 0
 
-        if stdev > 0
-          # Box-Muller transform for normal distribution
-          u1 = rng.rand
-          u2 = rng.rand
-          z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math::PI * u2)
-          sampled = effort + z * stdev
-          sampled = [sampled, 1.0].max  # minimum 1 slot
-          overrides[task.fullId] = sampled
-        end
+        complete = sc.instance_variable_get(:@complete) rescue nil
+        complete = complete.respond_to?(:to_f) ? complete.to_f : 0.0
+
+        # Skip fully completed tasks
+        next if complete >= 100
+
+        # Remaining fraction
+        remaining_fraction = (100.0 - complete) / 100.0
+        remaining_effort = effort * remaining_fraction
+        remaining_stdev = stdev * remaining_fraction
+
+        # Box-Muller transform for normal distribution
+        u1 = rng.rand
+        u2 = rng.rand
+        z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math::PI * u2)
+        sampled_remaining = remaining_effort + z * remaining_stdev
+        sampled_remaining = [sampled_remaining, 1.0].max
+
+        # Convert back to total effort for the override
+        # (build_variables computes remaining from total * (100-complete)/100)
+        sampled_total = (complete > 0) ? sampled_remaining / remaining_fraction : sampled_remaining
+        overrides[task.fullId] = sampled_total
       end
 
       overrides

@@ -221,7 +221,8 @@ export class MonteCarloComponent {
     this.result.set(null);
 
     const taskIds = this.ui.filteredTaskIds() || undefined;
-    this.backend.monteCarlo(sid, this.numRuns, taskIds).subscribe({
+    const scenario = this.ui.activeScenario() || undefined;
+    this.backend.monteCarlo(sid, this.numRuns, taskIds, scenario).subscribe({
       next: (r) => {
         this.result.set(r);
         this.loading.set(false);

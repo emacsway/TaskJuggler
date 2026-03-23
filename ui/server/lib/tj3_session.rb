@@ -166,11 +166,12 @@ class Tj3Session
     }
   end
 
-  def monte_carlo(num_runs: 20, timeout: 60, task_ids: nil)
+  def monte_carlo(num_runs: 20, timeout: 60, task_ids: nil, scenario: nil)
     return { error: 'Project not scheduled' } unless scheduled?
 
+    scenario_idx = resolve_scenario_idx(scenario)
     require 'taskjuggler/CpSatScheduler'
-    optimizer = TaskJuggler::CpSatScheduler.new(@project, 0, timeout: timeout)
+    optimizer = TaskJuggler::CpSatScheduler.new(@project, scenario_idx, timeout: timeout)
     result = optimizer.monte_carlo(num_runs: num_runs, scope_task_ids: task_ids)
     result || { error: 'Monte Carlo failed' }
   end
