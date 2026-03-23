@@ -61,7 +61,8 @@ class TaskJuggler
 
     attr_reader :id, :cellText, :tooltip, :hAlign, :cellColor, :fontColor
     attr_accessor :title, :start, :end, :scale, :listItem, :listType,
-                  :width, :content, :column, :timeformat1, :timeformat2
+                  :width, :content, :column, :timeformat1, :timeformat2,
+                  :expression
 
     def initialize(id, title)
       # The column ID. It must be unique within the report.
@@ -108,6 +109,8 @@ class TaskJuggler
       # Reference to the ReportTableColumn object that was created based on this
       # definition.
       @column = nil
+      # Optional ArithExpr for computed columns.
+      @expression = nil
     end
 
   end

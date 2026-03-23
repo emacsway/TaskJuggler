@@ -81,10 +81,11 @@ class TaskJuggler
                   @report.name + '.csv'
 
       # Generate the table header.
+      # Expression columns only appear once, with taskList.
       headers = [ 'Date' ] +
-                generatePropertyListHeader(accountList, query) +
-                generatePropertyListHeader(resourceList, query) +
-                generatePropertyListHeader(taskList, query)
+                generatePropertyListHeader(accountList, query, false) +
+                generatePropertyListHeader(resourceList, query, false) +
+                generatePropertyListHeader(taskList, query, true)
 
       discontinuedColumns = 0
       if File.exist?(@fileName)
@@ -142,9 +143,9 @@ class TaskJuggler
       @table[idx] << dateTag
 
       # Now add the new values to the line
-      generatePropertyListValues(idx, accountList, query)
-      generatePropertyListValues(idx, resourceList, query)
-      generatePropertyListValues(idx, taskList, query)
+      generatePropertyListValues(idx, accountList, query, false)
+      generatePropertyListValues(idx, resourceList, query, false)
+      generatePropertyListValues(idx, taskList, query, true)
 
       # Fill the discontinued columns with old values or nil.
       @table[idx] += discColumnValues
@@ -190,46 +191,75 @@ class TaskJuggler
 
     private
 
-    def generatePropertyListHeader(propertyList, query)
+    def generatePropertyListHeader(propertyList, query, include_expressions = true)
       headers = []
       query = query.dup
       a('columns').each do |columnDescr|
-        query.attributeId = columnDescr.id
-        a('scenarios').each do |scenarioIdx|
-          query.scenarioIdx = scenarioIdx
-          propertyList.each do |property|
-            query.property = property
-
-            #adjustColumnPeriod(columnDescr, propertyList, a.get('scenarios'))
-            header = SimpleQueryExpander.new(columnDescr.title, query,
-                                             @report.sourceFileInfo).expand
-
-            if headers.include?(header)
-              error('trace_columns_not_uniq',
-                    "The column title '#{header}' is already used " +
-                    "by a previous column. Column titles must be " +
-                    "unique!")
-            end
-
+        if columnDescr.expression
+          next unless include_expressions
+          # Expression column: one header (aggregate), not per-property
+          a('scenarios').each do |scenarioIdx|
+            header = columnDescr.title || columnDescr.id
             headers << header
+          end
+        else
+          query.attributeId = columnDescr.id
+          a('scenarios').each do |scenarioIdx|
+            query.scenarioIdx = scenarioIdx
+            propertyList.each do |property|
+              query.property = property
+
+              header = SimpleQueryExpander.new(columnDescr.title, query,
+                                               @report.sourceFileInfo).expand
+
+              if headers.include?(header)
+                error('trace_columns_not_uniq',
+                      "The column title '#{header}' is already used " +
+                      "by a previous column. Column titles must be " +
+                      "unique!")
+              end
+
+              headers << header
+            end
           end
         end
       end
       headers
     end
 
-    def generatePropertyListValues(idx, propertyList, query)
+    def generatePropertyListValues(idx, propertyList, query, include_expressions = true)
       @report.get('columns').each do |columnDescr|
-        query.attributeId = columnDescr.id
+        if columnDescr.expression
+          next unless include_expressions
+          # Expression column: evaluate expression
+          a('scenarios').each do |scenarioIdx|
+            query.scenarioIdx = scenarioIdx
 
-        a('scenarios').each do |scenarioIdx|
-          query.scenarioIdx = scenarioIdx
+            if columnDescr.expression.is_a?(TaskJuggler::ArithAggregate)
+              # Aggregate: evaluate across all visible properties
+              val = columnDescr.expression.eval_aggregate(query, propertyList)
+              @table[idx] << val
+            else
+              # Per-task expression (use first property or nil)
+              if propertyList.empty?
+                @table[idx] << nil
+              else
+                query.property = propertyList.first
+                @table[idx] << columnDescr.expression.eval_for(query)
+              end
+            end
+          end
+        else
+          query.attributeId = columnDescr.id
 
-          propertyList.each do |property|
-            query.property = property
+          a('scenarios').each do |scenarioIdx|
+            query.scenarioIdx = scenarioIdx
 
-            query.process
-            @table[idx] << query.result
+            propertyList.each do |property|
+              query.property = property
+              query.process
+              @table[idx] << query.result
+            end
           end
         end
       end
