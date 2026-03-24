@@ -1664,6 +1664,19 @@ EOT
        )
     arg(2, 'ID', 'The ID of the parent')
 
+    pattern(%w( _dependson _( $ID _, $ID _) ))
+    doc('dependson', <<'EOT'
+Will evaluate to true for tasks that have the specified task in their
+dependency list (depends) for the given scenario. This is useful for
+filtering tasks that belong to a specific sprint when tasks depend on
+sprint milestone rather than being children of the sprint.
+
+Example: hidetask ~dependson(deliveries.sprint_63, fact)
+EOT
+       )
+    arg(2, 'task ID', 'The ID of the task to check dependency on')
+    arg(4, 'scenario ID', 'A scenario ID')
+
     pattern(%w( _isdependencyof _( $ID _, $ID _, $INTEGER _) ))
     doc('isdependencyof', <<'EOT'
 Will evaluate to true for tasks that depend on the specified task in
