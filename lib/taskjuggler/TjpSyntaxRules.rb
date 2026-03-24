@@ -727,6 +727,18 @@ EOT
     doc('columnid', <<'EOT'
 This is a comprehensive list of all pre-defined [[columns]]. In addition to
 the listed IDs all user defined attributes can be used as column IDs.
+
+In [[tracereport]] columns, you can also use arithmetic expressions enclosed
+in double quotes instead of a column ID. Expressions support the operators
++, -, *, / with standard precedence, parentheses for grouping, and the
+following aggregate functions: sum(), avg(), count(), min(), max().
+The round() function can be used to control decimal places.
+
+ tracereport "Burndown" {
+   columns "round(sum(effort * (100 - complete) / 100), 1)" { title "Remaining" }
+ }
+
+Expression columns are currently only supported in tracereport.
 EOT
        )
   end
@@ -1667,15 +1679,37 @@ EOT
     pattern(%w( _dependson _( $ID _, $ID _) ))
     doc('dependson', <<'EOT'
 Will evaluate to true for tasks that have the specified task in their
-dependency list (depends) for the given scenario. This is useful for
-filtering tasks that belong to a specific sprint when tasks depend on
-sprint milestone rather than being children of the sprint.
+dependency list (depends) for the given scenario. This is the reverse of
+[[isdependencyof]]: while isdependencyof checks if the current task is
+a dependency OF another task, dependson checks if the current task
+DEPENDS ON another task.
 
-Example: hidetask ~dependson(deliveries.sprint_63, fact)
+This is useful for filtering tasks that belong to a specific sprint when
+tasks depend on a sprint milestone rather than being children of the sprint.
+
+ # Show only tasks assigned to sprint 63
+ taskreport "Sprint 63" {
+   hidetask ~dependson(deliveries.sprint_63, fact)
+   columns name, effort, effortdone, effortleft, complete
+ }
+
+ # Burndown chart for sprint 63
+ tracereport "Sprint 63 Burndown" {
+   hidetask ~dependson(deliveries.sprint_63, fact)
+   hideresource @all
+   columns "round(sum(effort * (100 - complete) / 100), 1)" { title "Remaining" }
+ }
+
+ # Hide sprint 63 tasks (show everything else)
+ taskreport "Other Tasks" {
+   hidetask dependson(deliveries.sprint_63, fact)
+   columns name, effort
+ }
 EOT
        )
     arg(2, 'task ID', 'The ID of the task to check dependency on')
     arg(4, 'scenario ID', 'A scenario ID')
+    example('DependsOn', '1')
 
     pattern(%w( _isdependencyof _( $ID _, $ID _, $INTEGER _) ))
     doc('isdependencyof', <<'EOT'
