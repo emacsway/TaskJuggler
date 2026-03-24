@@ -1,0 +1,62 @@
+project "DependsOn Function Demo" 2024-01-01 - 2024-12-31 {
+  timezone "UTC"
+  now 2024-06-01
+  scenario plan "Plan" {
+    scenario fact "Fact"
+  }
+}
+
+resource dev1 "Developer 1"
+resource dev2 "Developer 2"
+
+task deliveries "Deliveries" {
+  task sprint1 "Sprint 1" {
+    start 2024-02-01
+    milestone
+  }
+  task sprint2 "Sprint 2" {
+    start 2024-03-01
+    milestone
+  }
+}
+
+task t1 "Task 1" {
+  effort 5d
+  allocate dev1
+  fact:depends deliveries.sprint1
+}
+task t2 "Task 2" {
+  effort 3d
+  allocate dev2
+  fact:depends deliveries.sprint1
+}
+task t3 "Task 3" {
+  effort 4d
+  allocate dev1
+  fact:depends deliveries.sprint2
+}
+
+# *** EXAMPLE: 1 +
+# Show only tasks belonging to sprint 1
+taskreport "Sprint 1 Tasks" {
+  hidetask ~dependson(deliveries.sprint1, fact)
+  columns name, effort, complete
+}
+# *** EXAMPLE: 1 -
+
+# *** EXAMPLE: 2 +
+# Show tasks NOT belonging to sprint 1
+taskreport "Other Tasks" {
+  hidetask dependson(deliveries.sprint1, fact)
+  columns name, effort
+}
+# *** EXAMPLE: 2 -
+
+# *** EXAMPLE: 3 +
+# Burndown chart for sprint 1
+tracereport "Sprint 1 Burndown" {
+  hidetask ~dependson(deliveries.sprint1, fact)
+  hideresource @all
+  columns "round(sum(effort * (100 - complete) / 100), 1)" { title "Remaining" }
+}
+# *** EXAMPLE: 3 -
