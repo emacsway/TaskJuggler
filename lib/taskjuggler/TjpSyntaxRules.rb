@@ -727,6 +727,18 @@ EOT
     doc('columnid', <<'EOT'
 This is a comprehensive list of all pre-defined [[columns]]. In addition to
 the listed IDs all user defined attributes can be used as column IDs.
+
+In [[tracereport]] columns, you can also use arithmetic expressions enclosed
+in double quotes instead of a column ID. Expressions support the operators
++, -, *, / with standard precedence, parentheses for grouping, and the
+following aggregate functions: sum(), avg(), count(), min(), max().
+The round() function can be used to control decimal places.
+
+ tracereport "Burndown" {
+   columns "round(sum(effort * (100 - complete) / 100), 1)" { title "Remaining" }
+ }
+
+Expression columns are currently only supported in tracereport.
 EOT
        )
   end
