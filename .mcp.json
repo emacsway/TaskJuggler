@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tj3": {
+      "command": "ruby",
+      "args": ["/home/ivan/springdel/apps/TaskJuggler/mcp/tj3_mcp_server.rb"]
+    }
+  }
+}
