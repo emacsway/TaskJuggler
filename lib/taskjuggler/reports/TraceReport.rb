@@ -236,8 +236,7 @@ class TaskJuggler
             query.scenarioIdx = scenarioIdx
 
             expr = columnDescr.expression
-            if expr.is_a?(TaskJuggler::ArithAggregate) ||
-               (expr.respond_to?(:aggregate?) && expr.aggregate?)
+            if expr.aggregate?
               # Aggregate (possibly wrapped in round): evaluate across all visible properties
               val = expr.eval_aggregate(query, propertyList)
               @table[idx] << val

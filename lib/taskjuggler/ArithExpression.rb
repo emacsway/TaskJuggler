@@ -19,6 +19,17 @@ class TaskJuggler
     def eval_for(query)
       raise NotImplementedError
     end
+
+    # Does this expression contain any aggregate function?
+    def aggregate?
+      false
+    end
+
+    # Evaluate expression with aggregates resolved over a property list.
+    # Default: just eval_for (no aggregate).
+    def eval_aggregate(query, property_list)
+      eval_for(query)
+    end
   end
 
   # Numeric literal: 100, 0.5
@@ -67,6 +78,30 @@ class TaskJuggler
     def eval_for(query)
       l = @left.eval_for(query)
       r = @right.eval_for(query)
+      apply(l, r)
+    end
+
+    def aggregate?
+      @left.aggregate? || @right.aggregate?
+    end
+
+    # Evaluate with aggregates resolved over property_list.
+    # Each operand is evaluated as aggregate if it contains one,
+    # or as a plain scalar otherwise.
+    def eval_aggregate(query, property_list)
+      l = @left.aggregate? ? @left.eval_aggregate(query, property_list) : @left.eval_for(query)
+      r = @right.aggregate? ? @right.eval_aggregate(query, property_list) : @right.eval_for(query)
+      return nil if l.nil? || r.nil?
+      apply(l, r)
+    end
+
+    def to_s
+      "(#{@left} #{@op} #{@right})"
+    end
+
+    private
+
+    def apply(l, r)
       case @op
       when :+ then l + r
       when :- then l - r
@@ -74,10 +109,6 @@ class TaskJuggler
       when :/ then r != 0 ? l / r : 0.0
       else 0.0
       end
-    end
-
-    def to_s
-      "(#{@left} #{@op} #{@right})"
     end
   end
 
@@ -112,6 +143,10 @@ class TaskJuggler
       end
     end
 
+    def aggregate?
+      true
+    end
+
     def to_s
       "#{@func}(#{@inner})"
     end
@@ -131,20 +166,13 @@ class TaskJuggler
       val.round(@digits)
     end
 
-    # Delegate aggregate evaluation if inner is an aggregate
     def eval_aggregate(query, property_list)
-      if @inner.respond_to?(:eval_aggregate)
-        val = @inner.eval_aggregate(query, property_list)
-        val ? val.round(@digits) : nil
-      else
-        nil
-      end
+      val = @inner.eval_aggregate(query, property_list)
+      val ? val.round(@digits) : nil
     end
 
-    # Check if this contains an aggregate
     def aggregate?
-      @inner.is_a?(ArithAggregate) ||
-        (@inner.respond_to?(:aggregate?) && @inner.aggregate?)
+      @inner.aggregate?
     end
 
     def to_s

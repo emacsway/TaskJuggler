@@ -208,4 +208,31 @@ complete 0 }
     # avg(100, 50, 0) = 50
     assert_in_delta(50.0, avg, 0.1, "avg(complete) should be 50")
   end
+
+  # ── Multi-aggregate expression: weighted percentage ────────
+
+  def test_weighted_percentage
+    run_tracereport(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-06-01 { timezone "UTC" now 2024-03-15 }
+      resource dev "Dev"
+      task t1 "Task 1" { effort 10d
+allocate dev
+complete 100 }
+      task t2 "Task 2" { effort 20d
+allocate dev
+complete 50 }
+      task t3 "Task 3" { effort 10d
+allocate dev
+complete 0 }
+      tracereport weighted "weighted" {
+        columns "round(sum(effort * complete / 100) / sum(effort) * 100, 1)" { title "Done %" }
+        hideresource @all
+      }
+    TJP
+
+    csv = read_csv('weighted')
+    pct = csv.strip.split("\n")[1].split(';')[1].to_f
+    # (10*100/100 + 20*50/100 + 10*0/100) / (10+20+10) * 100 = 20/40*100 = 50.0
+    assert_in_delta(50.0, pct, 0.1, "weighted complete should be 50%")
+  end
 end
