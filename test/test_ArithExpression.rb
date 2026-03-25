@@ -192,7 +192,22 @@ class TestArithExpression < Test::Unit::TestCase
     assert(round_sum.aggregate?, "round(sum) should be detected as aggregate")
 
     plain = TaskJuggler::ArithExprParser.new("effort * 2").parse
-    assert(!plain.respond_to?(:aggregate?) || !plain.aggregate?)
+    assert(!plain.aggregate?)
+  end
+
+  def test_aggregate_in_binary_op
+    expr = TaskJuggler::ArithExprParser.new("sum(effort) / sum(effort) * 100").parse
+    assert(expr.aggregate?, "sum(x) / sum(x) * 100 should be aggregate")
+  end
+
+  def test_mixed_aggregate_and_literal
+    expr = TaskJuggler::ArithExprParser.new("sum(effort) + 10").parse
+    assert(expr.aggregate?, "sum(effort) + 10 should be aggregate")
+  end
+
+  def test_non_aggregate_binary
+    expr = TaskJuggler::ArithExprParser.new("effort + 10").parse
+    assert(!expr.aggregate?, "effort + 10 should not be aggregate")
   end
 
   # ── to_s roundtrip tests ────────────────────────────────────
