@@ -59,13 +59,13 @@ complete 50 }
       task t3 "Task 3" { effort 15d
 allocate dev
 complete 0 }
-      tracereport burndown "burndown" {
+      tracereport burnup "burnup" {
         columns "sum(effort * complete / 100)" { title "Done" }
         hideresource @all
       }
     TJP
 
-    csv = read_csv('burndown')
+    csv = read_csv('burnup')
     lines = csv.strip.split("\n")
     assert_match(/Done/, lines[0])
     # 10*100/100 + 20*50/100 + 15*0/100 = 10+10+0 = 20
