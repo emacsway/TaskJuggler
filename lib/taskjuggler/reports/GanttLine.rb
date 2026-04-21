@@ -214,22 +214,28 @@ class TaskJuggler
         # bars for the task.
         xStart = @chart.dateToX(taskStart)
         xEnd = @chart.dateToX(taskEnd)
+        xSigmaEnd = sigmaWhiskerX(property, taskEnd)
         @chart.addTask(property, self)
         @content <<
           if property['milestone', @query.scenarioIdx]
-            GanttMilestone.new(@height, xStart, @y)
+            GanttMilestone.new(@height, xStart, @y, xSigmaEnd)
           elsif property.container? &&
                 ((rollupExpr = @query.project.reportContexts.
                               last.report.get('rollupTask')).nil? ||
                  !rollupExpr.eval(@query))
-            GanttContainer.new(@height, xStart, xEnd, @y)
+            GanttContainer.new(@height, xStart, xEnd, @y, xSigmaEnd)
           else
-            GanttTaskBar.new(@query, @height, xStart, xEnd, @y)
+            GanttTaskBar.new(@query, @height, xStart, xEnd, @y, xSigmaEnd)
           end
 
         # Make sure the legend includes the Gantt symbols.
         @chart.table.legend.showGanttItems = true if @chart.table
         @chart.table.legend.addGanttItem('Off-duty period', 'offduty')
+        if xSigmaEnd
+          @chart.table.legend.addGanttItem(
+            'Uncertainty whisker (k·sigma of end date)', 'taskbarsigma') \
+            if @chart.table
+        end
       end
 
     end
@@ -332,6 +338,35 @@ class TaskJuggler
         @content << GanttLoadStack.new(self, x + 1, w - 2, values, categories)
       end
 
+    end
+
+    # If the chart's column has a σ-multiplier configured (via the
+    # `sigma` or `percentile` column option), compute the X coordinate
+    # of the k·σ "uncertainty whisker" tail — the right edge of a
+    # semi-transparent extension rendered past the task's scheduled
+    # end. Returns nil if no σ option is set, if the task is not yet
+    # scheduled, or if k·σ rounds to zero slots.
+    def sigmaWhiskerX(property, taskEnd)
+      columnDef = @chart.columnDef
+      return nil if columnDef.nil? || columnDef.sigmaFactor.nil?
+      return nil if taskEnd.nil?
+
+      ts = property.data[@query.scenarioIdx]
+      return nil if ts.nil?
+
+      sigma_slots = ts.endStdevSlots(columnDef.pertMemo)
+      return nil if sigma_slots <= 0.0
+
+      offset = (columnDef.sigmaFactor * sigma_slots).round
+      return nil if offset == 0
+
+      project = @query.project
+      end_idx = project.dateToIdx(taskEnd)
+      target_idx = end_idx + offset
+      target_idx = 0 if target_idx < 0
+      max_idx = project.scoreboardSize - 1
+      target_idx = max_idx if target_idx > max_idx
+      @chart.dateToX(project.idxToDate(target_idx))
     end
 
     # Generate the data structures that mark the time-off periods of a task or

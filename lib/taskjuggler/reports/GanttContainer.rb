@@ -27,12 +27,15 @@ class TaskJuggler
     # Create a GanttContainer object based on the following information: _line_
     # is a reference to the GanttLine. _xStart_ is the left edge of the task in
     # chart coordinates. _xEnd_ is the right edge. The container extends over
-    # the edges due to the shape of the jags.
-    def initialize(lineHeight, xStart, xEnd, y)
+    # the edges due to the shape of the jags. _xSigmaEnd_, if given, is the
+    # right edge of an optional uncertainty whisker rendered past _xEnd_
+    # (set by column options `sigma`/`percentile`; nil means no whisker).
+    def initialize(lineHeight, xStart, xEnd, y, xSigmaEnd = nil)
       @lineHeight = lineHeight
       @start = xStart
       @end = xEnd
       @y = y
+      @sigmaEnd = xSigmaEnd
     end
 
     # Return the point [ x, y ] where task start dependency lines should start
@@ -92,6 +95,16 @@ class TaskJuggler
       html << jagToHTML(xStart, yCenter)
       # The right jag
       html << jagToHTML(xStart + width, yCenter)
+
+      # Uncertainty whisker: tail past the container's right jag.
+      if @sigmaEnd && @sigmaEnd > @end
+        whiskerStart = xStart + width + @@size
+        whiskerW     = @sigmaEnd.to_i - whiskerStart
+        if whiskerW > 0
+          html << rectToHTML(whiskerStart, yCenter - @@size + 1, whiskerW,
+                             @@size - 1, 'containerbarsigma')
+        end
+      end
 
       html
     end

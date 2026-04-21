@@ -400,6 +400,32 @@ p.tj_journal {
   background-color:#36363f;
   position:absolute;
 }
+.taskbarsigma {
+  /* Semi-transparent extension past the scheduled end, showing the
+     range [end, end + k·sigma]. Striped so it is visually distinct
+     from the deterministic bar. */
+  background-color:#2f57ea;
+  background-image:repeating-linear-gradient(
+      135deg,
+      rgba(255,255,255,0) 0 4px,
+      rgba(255,255,255,0.25) 4px 8px);
+  opacity:0.55;
+  position:absolute;
+}
+.containerbarsigma {
+  background-color:#09090a;
+  background-image:repeating-linear-gradient(
+      135deg,
+      rgba(255,255,255,0) 0 4px,
+      rgba(255,255,255,0.20) 4px 8px);
+  opacity:0.55;
+  position:absolute;
+}
+.milestonesigma {
+  background-color:#09090a;
+  opacity:0.50;
+  position:absolute;
+}
 .milestone {
   background-color:#09090a;
   position:absolute;

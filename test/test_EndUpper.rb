@@ -305,4 +305,114 @@ class TestEndUpper < Test::Unit::TestCase
     File.delete(tmpfile) rescue nil
   end
 
+  # ─── Gantt whisker rendering ────────────────────────────────
+
+  def test_gantt_chart_sigma_option_renders_whiskers
+    # A `chart` column with `sigma N` must render an additional
+    # semi-transparent tail (`.taskbarsigma` / `.milestonesigma` HTML
+    # element) past each task's scheduled end. Without the option, no
+    # such element is emitted.
+    require 'taskjuggler/Tj3Config'
+    AppConfig.appName = 'tj3'
+
+    tjp = <<~TJP
+      project test "Test" 2024-01-01 - 2024-12-31 { timezone "UTC" now 2024-01-01 }
+      resource r "R"
+      task a "A" {
+        start 2024-01-01
+        effort 10d
+        stdev 2d
+        allocate r
+      }
+      task m "Release" {
+        depends a
+        milestone
+      }
+      taskreport "with_whiskers" {
+        formats html
+        selfcontained yes
+        columns name, chart { scale day width 400 sigma 3 }
+      }
+      taskreport "no_whiskers" {
+        formats html
+        selfcontained yes
+        columns name, chart { scale day width 400 }
+      }
+    TJP
+    tmpfile = File.join(Dir.tmpdir, "test_gantt_whisker_#{$$}.tjp")
+    File.write(tmpfile, tjp)
+    tj = TaskJuggler.new
+    assert(tj.parse([tmpfile]), "Parse failed: #{@mh.messages.map(&:to_s).join("\n")}")
+    assert(tj.schedule, "Schedule failed")
+
+    Dir.mktmpdir do |outdir|
+      assert(tj.generateReports(outdir), "Report generation failed")
+      with = File.read(File.join(outdir, 'with_whiskers.html'))
+      without = File.read(File.join(outdir, 'no_whiskers.html'))
+
+      # With whiskers: taskbar and milestone whisker elements are
+      # present, each with non-zero width.
+      assert(with.scan(/class="taskbarsigma"[^>]*width:(\d+)px/).any? { |w| w.first.to_i > 0 },
+             "sigma column option should emit a non-empty .taskbarsigma element")
+      assert(with.include?('class="milestonesigma"'),
+             "sigma column option should emit a .milestonesigma element for the milestone")
+
+      # Without the option: no whisker div elements at all (CSS may
+      # still declare the class, so we check for element usage
+      # explicitly).
+      assert(!without.match?(/<div[^>]*class="taskbarsigma"/),
+             "chart column without sigma option must not emit .taskbarsigma elements")
+      assert(!without.match?(/<div[^>]*class="milestonesigma"/),
+             "chart column without sigma option must not emit .milestonesigma elements")
+    end
+    File.delete(tmpfile) rescue nil
+  end
+
+  def test_gantt_whisker_width_scales_with_sigma_factor
+    # The same task rendered with sigma 1 and sigma 3 must produce
+    # whiskers whose widths are roughly in a 1:3 ratio (allowing for
+    # slot rounding at coarse chart scales).
+    require 'taskjuggler/Tj3Config'
+    AppConfig.appName = 'tj3'
+
+    tjp = <<~TJP
+      project test "Test" 2024-01-01 - 2024-12-31 { timezone "UTC" now 2024-01-01 }
+      resource r "R"
+      task a "A" {
+        start 2024-01-01
+        effort 20d
+        stdev 3d
+        allocate r
+      }
+      taskreport "r1" {
+        formats html
+        selfcontained yes
+        columns chart { scale day width 600 sigma 1 }
+      }
+      taskreport "r3" {
+        formats html
+        selfcontained yes
+        columns chart { scale day width 600 sigma 3 }
+      }
+    TJP
+    tmpfile = File.join(Dir.tmpdir, "test_gantt_scale_#{$$}.tjp")
+    File.write(tmpfile, tjp)
+    tj = TaskJuggler.new
+    tj.parse([tmpfile]); tj.schedule
+    Dir.mktmpdir do |outdir|
+      tj.generateReports(outdir)
+      w1 = File.read(File.join(outdir, 'r1.html')).
+             match(/class="taskbarsigma"[^>]*width:(\d+)px/)[1].to_i
+      w3 = File.read(File.join(outdir, 'r3.html')).
+             match(/class="taskbarsigma"[^>]*width:(\d+)px/)[1].to_i
+      assert(w3 > w1, "sigma 3 whisker (#{w3}px) should be wider than sigma 1 (#{w1}px)")
+      # Expect ratio near 3; allow ±20% for slot-to-pixel quantisation
+      # at 'day' scale.
+      ratio = w3.to_f / w1
+      assert(ratio > 2.4 && ratio < 3.6,
+             "w3/w1 should be near 3, got #{ratio}")
+    end
+    File.delete(tmpfile) rescue nil
+  end
+
 end

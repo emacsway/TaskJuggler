@@ -27,11 +27,14 @@ class TaskJuggler
     # Create a GanttMilestone object based on the following information: _task_
     # is a reference to the Task to be displayed. _lineHeight_ is the height of
     # the line this milestone is shown in. _x_ and _y_ are the coordinates of
-    # the center of the milestone in the GanttChart.
-    def initialize(lineHeight, x, y)
+    # the center of the milestone in the GanttChart. _xSigmaEnd_, if given,
+    # is the right edge of an uncertainty whisker extending past the
+    # milestone's point.
+    def initialize(lineHeight, x, y, xSigmaEnd = nil)
       @lineHeight = lineHeight
       @x = x
       @y = y
+      @sigmaEnd = xSigmaEnd
     end
 
     # Return the point [ x, y ] where task start dependency lines should start
@@ -72,6 +75,15 @@ class TaskJuggler
       # Invisible trigger frame for tooltips.
       html << rectToHTML(@x - (@lineHeight / 2), 0, @lineHeight, @lineHeight,
                          'tj_gantt_frame')
+
+      # Uncertainty whisker: a thin bar from the milestone centre to the
+      # k·σ tail. Rendered before the diamond so the diamond sits on top.
+      if @sigmaEnd && @sigmaEnd > @x
+        whiskerW = @sigmaEnd.to_i - @x.to_i
+        yCenter = (@lineHeight / 2).to_i
+        html << rectToHTML(@x.to_i, yCenter - 2, whiskerW, 4,
+                           'milestonesigma')
+      end
 
       # Draw a diamond shape.
       html += diamondToHTML(@x, @lineHeight / 2)
