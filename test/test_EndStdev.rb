@@ -197,19 +197,24 @@ class TestEndStdev < Test::Unit::TestCase
     p = tj.project
     a = ts(p, 'a'); b = ts(p, 'b'); c = ts(p, 'c'); d = ts(p, 'd')
 
-    sigma_c = expected_leaf_duration_sigma(c)
-    sigma_dur_d = expected_leaf_duration_sigma(d)
-    expected_d = Math.sqrt(sigma_c**2 + sigma_dur_d**2)
-    assert_in_delta(expected_d, d.endStdevSlots, TOL,
-                    "σ_end(D) must use only critical predecessor C, not RSS of A/B/C")
-
-    # A and B do not contribute: an over-counting implementation that
-    # folded all predecessors would give √(σ_a² + σ_b² + σ_c² + σ_dur_d²),
-    # strictly larger than the correct answer.
     sigma_a = expected_leaf_duration_sigma(a)
     sigma_b = expected_leaf_duration_sigma(b)
-    over_counted = Math.sqrt(sigma_a**2 + sigma_b**2 + sigma_c**2 + sigma_dur_d**2)
-    assert(d.endStdevSlots < over_counted,
+    sigma_c = expected_leaf_duration_sigma(c)
+    sigma_dur_d = expected_leaf_duration_sigma(d)
+
+    # With well-separated mean ends (3d/5d/10d), Clark-1961 merging
+    # reduces to the σ of the dominant predecessor (C) to within a
+    # fraction of a slot. σ_end(D) must therefore be approximately the
+    # critical-path value, NOT the RSS of all predecessors.
+    critical_path = Math.sqrt(sigma_c**2 + sigma_dur_d**2)
+    over_counted  = Math.sqrt(sigma_a**2 + sigma_b**2 + sigma_c**2 + sigma_dur_d**2)
+    result        = d.endStdevSlots
+
+    rel_err_vs_crit = (result - critical_path).abs / critical_path
+    assert(rel_err_vs_crit < 0.01,
+           "σ_end(D) must be within 1% of critical-path value for well-separated means; " \
+           "got rel_err=#{rel_err_vs_crit}")
+    assert(result < over_counted,
            "σ_end(D) must be strictly less than the over-counted RSS of all predecessors")
   end
 

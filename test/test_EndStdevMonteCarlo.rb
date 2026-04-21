@@ -5,46 +5,37 @@
 # = test_EndStdevMonteCarlo.rb -- The TaskJuggler III Project Management Software
 #
 # Monte Carlo validation of the PERT method-of-moments propagation
-# implemented by TaskScenario#endStdevSlots. These tests sample task
-# effort from a normal distribution, compute the resulting end-date
-# distribution empirically, and compare its standard deviation against
-# the PERT estimate.
+# used by TaskScenario#endStdevSlots. Each test samples task effort
+# from a normal distribution, propagates through a DAG by the same
+# rules as the TJ3 scheduler (sum along chains, max at merges),
+# records the empirical distribution of the target task's end date,
+# and compares its standard deviation against the analytical PERT
+# estimate that uses Clark-1961 merging at merge points.
 #
-# The tests document three regimes:
+# The tests cover:
 #
-# 1. CHAIN  — PERT is exact (σ_end = √Σσ_dur²).
-# 2. DIAMOND with DOMINANT critical path — the mean of the critical
-#    branch exceeds the nearest runner-up by several σ. PERT's
-#    critical-path assumption holds well and the estimate matches MC
-#    within a few percent.
-# 3. DIAMOND with NEAR-CRITICAL merge — two branches with similar
-#    means. PERT's critical-path rule takes σ from one branch only;
-#    the deviation from the true σ depends on the asymmetry of the
-#    branches:
+# 1. CHAIN — no merges, PERT is exact (σ = √Σσ_dur²).
+# 2. DIAMOND with DOMINANT critical path — well-separated means, Clark
+#    reduces to the critical-path rule; estimate matches MC within a
+#    few percent.
+# 3. DIAMOND with EQUAL iid branches — the classical trap where the
+#    critical-path rule overestimates σ. Clark's closed form captures
+#    σ_max/σ = √(1 − 1/π) ≈ 0.826 and matches MC.
+# 4. DIAMOND with asymmetric near-critical merge (high-σ runner-up
+#    just below the mean-critical path). The critical-path rule would
+#    underestimate σ; Clark accounts for the runner-up's variance.
 #
-#    * Equal means, equal σ on both sides → PERT OVERESTIMATES (the
-#      max-of-two-iid-normals distribution has σ ≈ 0.826·σ_branch,
-#      less than either branch).
-#    * Higher-mean-but-low-σ branch critical, plus a high-σ runner-up
-#      → PERT UNDERESTIMATES (real σ pulls in the runner-up's
-#      variance when it samples above the critical-path mean).
-#
-#    Either way, the first-moment critical-path model is approximate
-#    at merges. Clark (1961) gives the closed-form correction; it
-#    is not implemented here — see the roadmap in the endupper
-#    design document.
-#
-# The simulation operates on an abstract DAG (effort → duration assumed
-# linear, single resource at unit rate) to isolate PERT correctness from
-# TJ3's calendar arithmetic. This is the same model PERT's formula
-# approximates; what varies between PERT and MC is the treatment of
-# max-of-normals at merge points.
+# Both the critical-path rule (kept here as a reference) and the Clark
+# rule are computed on the abstract spec; the Clark rule is the one
+# TaskScenario#endStdevSlots uses. Gaps between the two rules on the
+# same topology are what motivate the Clark implementation.
 #
 
 $:.unshift File.join(File.dirname(__FILE__), '..', 'lib') if __FILE__ == $0
 $:.unshift File.dirname(__FILE__)
 
 require 'test/unit'
+require 'taskjuggler/ClarkMerge'
 
 class TestEndStdevMonteCarlo < Test::Unit::TestCase
 
@@ -102,130 +93,159 @@ class TestEndStdevMonteCarlo < Test::Unit::TestCase
     Math.sqrt(var)
   end
 
-  # PERT computation on the abstract model — mirrors TaskScenario#endStdevSlots
-  # logic but on the simple spec hash. Used to isolate the algorithm from
-  # TJ3's integration.
-  def pert_end_stdev(tasks_spec, target)
-    memo_mean = {}
-    memo_sigma = {}
+  # PERT σ computed with the naive critical-path rule: at merge points
+  # take σ from the predecessor with the largest mean end. Kept for
+  # reference so we can quantify what Clark's correction buys.
+  def pert_critical_path_stdev(tasks_spec, target)
+    memo = {}
     compute = lambda do |name|
-      return [memo_mean[name], memo_sigma[name]] if memo_mean.key?(name)
+      return memo[name] if memo.key?(name)
       spec = tasks_spec[name]
       if spec[:depends].empty?
-        mean = spec[:mean]
-        sigma = spec[:stdev]
+        result = [spec[:mean], spec[:stdev]]
       else
         pred_stats = spec[:depends].map { |d| compute.call(d) }
-        # Critical predecessor: largest mean end. Ties broken by max σ.
         crit = pred_stats.max_by { |m, s| [m, s] }
         start_mean, start_sigma = crit
-        mean = start_mean + spec[:mean]
-        sigma = Math.sqrt(start_sigma ** 2 + spec[:stdev] ** 2)
+        result = [start_mean + spec[:mean],
+                  Math.sqrt(start_sigma**2 + spec[:stdev]**2)]
       end
-      memo_mean[name] = mean
-      memo_sigma[name] = sigma
-      [mean, sigma]
+      memo[name] = result
     end
     compute.call(target)[1]
   end
 
-  # ─── Chain: PERT is exact ────────────────────────────────────
+  # PERT σ with Clark-1961 merging at merge points — mirrors the rule
+  # TaskScenario#endStdevSlots uses.
+  def pert_clark_stdev(tasks_spec, target)
+    memo = {}
+    compute = lambda do |name|
+      return memo[name] if memo.key?(name)
+      spec = tasks_spec[name]
+      if spec[:depends].empty?
+        result = [spec[:mean], spec[:stdev]]
+      else
+        pred_stats = spec[:depends].map { |d| compute.call(d) }
+        # Merge predecessor end moments via Clark to obtain σ of their max.
+        start_mean, start_sigma = TaskJuggler::ClarkMerge.reduce(pred_stats)
+        result = [start_mean + spec[:mean],
+                  Math.sqrt(start_sigma**2 + spec[:stdev]**2)]
+      end
+      memo[name] = result
+    end
+    compute.call(target)[1]
+  end
+
+  # ─── Chain: no merges, Clark == critical-path ───────────────
 
   def test_chain_pert_matches_mc
-    # A → B → C. Each mean=10, stdev=2. Expected PERT: σ = √(3·2²) = 2√3 ≈ 3.46.
+    # A → B → C. Each mean=10, stdev=2. Expected: σ = √(3·2²) = 2√3 ≈ 3.46.
     spec = {
       'a' => { mean: 10.0, stdev: 2.0, depends: [] },
       'b' => { mean: 10.0, stdev: 2.0, depends: ['a'] },
       'c' => { mean: 10.0, stdev: 2.0, depends: ['b'] }
     }
-    pert = pert_end_stdev(spec, 'c')
-    mc   = monte_carlo(spec, 'c')
-    assert_in_delta(Math.sqrt(3) * 2.0, pert, 1e-9,
-                    "PERT formula should be exact for chain: σ = √3·2")
-    rel_err = (pert - mc).abs / mc
-    assert(rel_err < 0.03,
-           "Chain PERT should match MC within 3%, got rel_err=#{rel_err}")
+    clark = pert_clark_stdev(spec, 'c')
+    crit  = pert_critical_path_stdev(spec, 'c')
+    mc    = monte_carlo(spec, 'c')
+    assert_in_delta(Math.sqrt(3) * 2.0, clark, 1e-9,
+                    "Chain Clark-PERT: σ = √3·2")
+    assert_in_delta(clark, crit, 1e-12,
+                    "Chain has no merges: Clark = critical-path")
+    assert((clark - mc).abs / mc < 0.03,
+           "Chain Clark should match MC within 3%, got rel_err=#{(clark - mc).abs / mc}")
   end
 
   # ─── Diamond with dominant critical path ─────────────────────
 
   def test_diamond_dominant_critical_path
     # Three parallel leaves with very different means — the longest
-    # dominates by many σ, so critical-path PERT is accurate.
+    # dominates by many σ. Clark reduces to critical-path here.
     spec = {
       'a' => { mean: 3.0,  stdev: 0.5, depends: [] },
       'b' => { mean: 5.0,  stdev: 0.5, depends: [] },
       'c' => { mean: 20.0, stdev: 0.5, depends: [] },
       'd' => { mean: 5.0,  stdev: 0.5, depends: ['a', 'b', 'c'] }
     }
-    pert = pert_end_stdev(spec, 'd')
-    mc   = monte_carlo(spec, 'd')
-    rel_err = (pert - mc).abs / mc
-    assert(rel_err < 0.05,
-           "Dominant-critical-path diamond: PERT should match MC within 5%, got rel_err=#{rel_err}")
+    clark = pert_clark_stdev(spec, 'd')
+    crit  = pert_critical_path_stdev(spec, 'd')
+    mc    = monte_carlo(spec, 'd')
+    assert((clark - crit).abs / crit < 0.001,
+           "Dominant critical path: Clark should agree with critical-path rule, got gap=#{(clark - crit).abs / crit}")
+    assert((clark - mc).abs / mc < 0.05,
+           "Dominant critical path: Clark should match MC within 5%, got rel_err=#{(clark - mc).abs / mc}")
   end
 
-  # ─── Diamond with near-critical merge ───────────────────────
+  # ─── Equal iid branches: where critical-path is WRONG ───────
 
-  def test_diamond_near_critical_merge_equal_branches_pert_overestimates
-    # Two identical branches (equal mean, equal σ). Max-of-two iid
-    # normals has σ ≈ 0.826·σ_branch — SMALLER than either branch.
-    # PERT returns the full σ of one branch, overestimating the true σ
-    # of the merge. This is a conservative bias.
+  def test_diamond_equal_iid_branches_clark_matches_mc
+    # Two identical N(10, 4) branches. Max-of-two-iid has
+    # σ_max = σ·√(1 − 1/π) ≈ 0.826·σ. Critical-path rule reports σ
+    # directly, OVERSTATING by ~21%; Clark captures the true ratio.
     spec = {
       'a' => { mean: 10.0, stdev: 2.0, depends: [] },
       'b' => { mean: 10.0, stdev: 2.0, depends: [] },
       'd' => { mean: 1.0,  stdev: 0.1, depends: ['a', 'b'] }
     }
-    pert = pert_end_stdev(spec, 'd')
-    mc   = monte_carlo(spec, 'd')
-    assert(pert > mc,
-           "PERT should overestimate σ_end at equal-branch merges; got pert=#{pert}, mc=#{mc}")
-    # Closed-form ratio for max of two iid N(μ,σ²) is σ_max/σ =
-    # √(1 - 1/π) ≈ 0.8256. With σ_d = 0.1, end σ_MC ≈
-    # √((0.826·2)² + 0.1²) ≈ 1.656. PERT reports √(2² + 0.1²) ≈ 2.002.
-    # Ratio mc/pert ≈ 0.827.
-    ratio = mc / pert
-    assert(ratio > 0.78 && ratio < 0.88,
-           "mc/pert should be near √(1 - 1/π) ≈ 0.826 for equal iid branches, got #{ratio}")
+    clark = pert_clark_stdev(spec, 'd')
+    crit  = pert_critical_path_stdev(spec, 'd')
+    mc    = monte_carlo(spec, 'd')
+
+    # Critical-path rule is biased high — quantify the gap so a
+    # regression that reverted Clark would be caught.
+    assert(crit > mc,
+           "Sanity: critical-path rule overestimates σ for equal iid branches")
+    # Clark should close most of that gap.
+    assert((clark - mc).abs / mc < 0.03,
+           "Equal iid branches: Clark should match MC within 3%, got rel_err=#{(clark - mc).abs / mc}")
+    # Closed-form ratio mc/crit ≈ √(1 − 1/π) ≈ 0.826 (ignoring σ_d=0.1
+    # which is small relative to 2.0).
+    assert(mc / crit > 0.80 && mc / crit < 0.90,
+           "Sanity: mc/crit should be near √(1 − 1/π) ≈ 0.826, got #{mc / crit}")
   end
 
-  def test_diamond_near_critical_merge_asymmetric_pert_underestimates
-    # Critical branch has smaller σ, near-critical branch has larger σ
-    # and nearly-equal mean. The runner-up occasionally samples above
-    # the critical path's mean, pulling σ_end UP. PERT, locked onto
-    # the mean-critical branch, UNDERESTIMATES true σ.
-    spec = {
-      'a' => { mean: 10.0, stdev: 0.5, depends: [] },  # critical by mean
-      'b' => { mean: 9.0,  stdev: 5.0, depends: [] },  # noisy runner-up
-      'd' => { mean: 1.0,  stdev: 0.1, depends: ['a', 'b'] }
-    }
-    pert = pert_end_stdev(spec, 'd')
-    mc   = monte_carlo(spec, 'd')
-    assert(pert < mc,
-           "PERT should underestimate when a high-σ runner-up straddles the critical-path mean; " \
-           "got pert=#{pert}, mc=#{mc}")
-    # The underestimation magnitude depends on the σ ratio — for
-    # σ_runner_up = 10·σ_critical, MC σ is typically several times PERT σ.
-    assert(mc / pert > 2.0,
-           "MC/PERT ratio should be > 2 in this highly asymmetric case, got #{mc / pert}")
-  end
-
-  # ─── Far-separated merge: PERT is still good ─────────────────
-
-  def test_diamond_well_separated_merge_pert_accurate
-    # When means differ by > 4σ, the Clark correction is negligible
-    # and PERT is effectively exact.
+  def test_diamond_asymmetric_branches_clark_matches_mc
+    # Critical branch: μ=10, σ=0.5 (low variance, leads by mean)
+    # Runner-up:      μ=9,  σ=5   (high variance, straddles critical mean)
+    # Critical-path rule takes σ=0.5, wildly UNDERSTATING true σ of max.
+    # Clark correctly folds in the runner-up's variance.
     spec = {
       'a' => { mean: 10.0, stdev: 0.5, depends: [] },
-      'b' => { mean: 5.0,  stdev: 0.5, depends: [] },  # 10·σ below a
+      'b' => { mean: 9.0,  stdev: 5.0, depends: [] },
       'd' => { mean: 1.0,  stdev: 0.1, depends: ['a', 'b'] }
     }
-    pert = pert_end_stdev(spec, 'd')
-    mc   = monte_carlo(spec, 'd')
-    rel_err = (pert - mc).abs / mc
-    assert(rel_err < 0.03,
-           "Well-separated merge: PERT should match MC within 3%, got rel_err=#{rel_err}")
+    clark = pert_clark_stdev(spec, 'd')
+    crit  = pert_critical_path_stdev(spec, 'd')
+    mc    = monte_carlo(spec, 'd')
+
+    # Critical-path is biased low — dramatically so in this regime.
+    assert(crit < mc,
+           "Sanity: critical-path rule underestimates σ when runner-up has high variance")
+    assert(mc / crit > 2.0,
+           "Sanity: mc/crit > 2 in this asymmetric case, got #{mc / crit}")
+    # Clark is not perfect on heavy-asymmetry cases — the operand it
+    # approximates as normal after the first merge is strongly skewed —
+    # but should be within 10% of MC.
+    assert((clark - mc).abs / mc < 0.10,
+           "Asymmetric merge: Clark should match MC within 10%, got rel_err=#{(clark - mc).abs / mc}")
+  end
+
+  # ─── Well-separated: Clark reduces to critical-path ──────────
+
+  def test_diamond_well_separated_merge_pert_accurate
+    # Means differ by >> σ: Clark correction is negligible.
+    spec = {
+      'a' => { mean: 10.0, stdev: 0.5, depends: [] },
+      'b' => { mean: 5.0,  stdev: 0.5, depends: [] },
+      'd' => { mean: 1.0,  stdev: 0.1, depends: ['a', 'b'] }
+    }
+    clark = pert_clark_stdev(spec, 'd')
+    crit  = pert_critical_path_stdev(spec, 'd')
+    mc    = monte_carlo(spec, 'd')
+    assert((clark - crit).abs / crit < 1e-6,
+           "Well-separated: Clark should equal critical-path to machine precision, got gap=#{(clark - crit).abs / crit}")
+    assert((clark - mc).abs / mc < 0.03,
+           "Well-separated: Clark should match MC within 3%, got rel_err=#{(clark - mc).abs / mc}")
   end
 
 end

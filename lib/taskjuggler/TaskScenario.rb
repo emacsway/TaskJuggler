@@ -15,6 +15,7 @@
 require 'taskjuggler/ScenarioData'
 require 'taskjuggler/DataCache'
 require 'taskjuggler/EffortDistribution'
+require 'taskjuggler/ClarkMerge'
 
 class TaskJuggler
 
@@ -1420,33 +1421,40 @@ class TaskJuggler
     end
 
     # Return the standard deviation of this task's scheduled end date, in
-    # scoreboard slots. Computed on demand from the effort distribution of
-    # leaf tasks and propagated through the dependency graph along the
-    # critical path (PERT method of moments).
+    # scoreboard slots. Computed on demand from leaf-task effort
+    # distributions and propagated through the task graph by the PERT
+    # method of moments, with Clark-1961 correction at merge points.
     #
     # Algorithm:
     #
-    # * Leaf:     σ_end = √(σ_start² + σ_duration²)
-    #             σ_duration = σ_effort · duration / effort
-    #             σ_start = max σ_end over dependency predecessors whose
-    #             relevant endpoint coincides with this task's start
-    # * Container: σ_end = σ_end of the child whose mean end date equals
-    #             this container's mean end date (critical child). If
-    #             several children tie, take the one with the largest σ.
-    # * Milestone / zero-effort / unscheduled task: σ_end = 0 locally; the
-    #             value still propagates from predecessors.
+    # * Leaf:      σ_end = √(σ_start² + σ_duration²)
+    #              σ_duration = σ_effort · duration / effort
+    #              σ_start is the σ of max of predecessor events (see
+    #              startStdevSlots), computed via Clark-1961 pairwise
+    #              merging over dep predecessors and resource-induced
+    #              predecessors.
+    # * Container: σ_end is the σ of max(child.end) over all children,
+    #              again computed via Clark-1961. In the well-separated
+    #              limit this reduces to the σ of the critical child;
+    #              for near-equal means it correctly shrinks σ below
+    #              either branch's value.
+    # * Milestone / zero-effort / unscheduled task: σ locally = 0; σ
+    #              still propagates through from predecessors.
     #
-    # The +memo+ hash is shared across a single report-generation request
-    # to make repeated queries on an N-task graph O(N + E) rather than
-    # exponential on diamond topologies. The key is [task_scenario,
-    # :end] or [task_scenario, :start] to memoize both propagation points
-    # independently.
+    # The +memo+ hash is shared across a single report-generation
+    # request to make repeated queries O(N + E) on the task graph and
+    # avoid exponential blow-up on diamond topologies. Keys are
+    # [task_scenario, :end] and [task_scenario, :start] so the two
+    # propagation points memoise independently.
     #
-    # This method intentionally makes no distributional assumption — it
-    # computes the second moment only. The relation between σ and tail
-    # probability (3σ ≈ P99.7, etc.) holds only if the resulting
-    # distribution is approximately normal; see the `endupper` documentation
-    # for a discussion of when that is warranted.
+    # Clark's formula assumes that operands are independent normals.
+    # Correlations from shared upstream predecessors are not modelled
+    # (PERT's standard assumption). After each pairwise merge the
+    # re-assumption of normality introduces a small compounding error;
+    # accuracy against Monte Carlo is typically within a few percent.
+    # The probabilistic interpretation of k·σ as a quantile relies on
+    # the result being approximately normal — see the endupper
+    # documentation for the wider discussion.
     def endStdevSlots(memo = {})
       key = [self, :end]
       return memo[key] if memo.key?(key)
@@ -1456,19 +1464,16 @@ class TaskJuggler
 
       sigma =
         if @property.container?
-          # σ of the container's end = σ_end of the critical child (the
-          # child whose mean end date equals the container's end). Ties
-          # broken by max σ — consistent with the critical-predecessor rule
-          # used for leaf tasks.
-          best = 0.0
+          moments = []
           @property.kids.each do |child|
             ts = child.data[@scenarioIdx]
-            next if ts.nil? || ts.instance_variable_get(:@end).nil?
-            next unless ts.instance_variable_get(:@end) == @end
-            child_sigma = ts.endStdevSlots(memo)
-            best = child_sigma if child_sigma > best
+            next if ts.nil?
+            child_end = ts.instance_variable_get(:@end)
+            next if child_end.nil?
+            mean_idx = @project.dateToIdx(child_end).to_f
+            moments << [mean_idx, ts.endStdevSlots(memo)]
           end
-          best
+          moments.empty? ? 0.0 : ClarkMerge.reduce(moments)[1]
         else
           sigma_start = startStdevSlots(memo)
           sigma_dur   = durationStdevSlots
@@ -1480,9 +1485,8 @@ class TaskJuggler
     end
 
     # Return the standard deviation of this task's scheduled start date,
-    # in scoreboard slots. Defined as σ_end (or σ_start, per +onEnd+ flag)
-    # of the critical predecessor: the task whose relevant endpoint
-    # determines — in the scheduled mean — this task's start.
+    # in scoreboard slots. Defined as σ of max(pred_event) over all
+    # candidate predecessors, computed via Clark-1961 pairwise merging.
     #
     # Predecessor sources considered:
     #
@@ -1494,15 +1498,14 @@ class TaskJuggler
     #   projects this is often the dominant constraint, so ignoring it
     #   systematically under-estimates σ_end of downstream tasks.
     #
-    # Selection rule: among all candidate predecessors, pick the one
-    # whose relevant event (end or start) falls at the LATEST scoreboard
-    # slot — i.e. the predecessor the scheduler waited for longest. Exact
-    # slot equality with task.start is NOT required because TJ3 may shift
-    # the start forward across non-working slots (nights, weekends) after
-    # the predecessor released.
+    # Candidates whose relevant event falls AFTER this task's start are
+    # discarded (they cannot be the constraining predecessor — the
+    # scheduler must have used a fixed start date or another constraint
+    # to override them). If no candidates remain, σ_start = 0.
     #
-    # If no candidate precedes this task's start (e.g. a fixed `start`
-    # date overrides every predecessor), σ_start = 0.
+    # Duplicates are deduplicated on (ts, on_end) so a task that appears
+    # as both an explicit dependency predecessor and a resource-induced
+    # predecessor is counted once.
     def startStdevSlots(memo = {})
       key = [self, :start]
       return memo[key] if memo.key?(key)
@@ -1511,15 +1514,22 @@ class TaskJuggler
       start_idx = startSlotIdx
       sigma = 0.0
       if start_idx
-        best_idx, best_sigma = nil, 0.0
+        seen = {}
         eachCriticalPredecessorCandidate(start_idx) do |ts, on_end, idx|
           cand_sigma = on_end ? ts.endStdevSlots(memo) : ts.startStdevSlots(memo)
-          if best_idx.nil? || idx > best_idx ||
-             (idx == best_idx && cand_sigma > best_sigma)
-            best_idx, best_sigma = idx, cand_sigma
+          k = [ts.object_id, on_end]
+          prev = seen[k]
+          # Keep the later event if the same (ts, on_end) appears twice,
+          # and break ties by the larger σ — monotone in both directions
+          # of what Clark's formula would care about.
+          if prev.nil? || idx > prev[0] ||
+             (idx == prev[0] && cand_sigma > prev[1])
+            seen[k] = [idx.to_f, cand_sigma]
           end
         end
-        sigma = best_sigma
+        unless seen.empty?
+          _, sigma = ClarkMerge.reduce(seen.values)
+        end
       end
 
       memo[key] = sigma
