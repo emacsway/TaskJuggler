@@ -1,0 +1,31 @@
+project "EndUpper" 2024-01-01 +2m {
+  timezone "UTC"
+  now 2024-01-01
+}
+
+resource r "R"
+
+task a "A" {
+  start 2024-01-01
+  effort 5d
+  stdev 1d
+  allocate r
+}
+
+task b "B" {
+  effort 3d
+  stdev 0.5d
+  allocate r
+  depends a
+}
+
+taskreport "Deadlines" {
+  formats html
+  columns name, start, end,
+          endupper,
+          endupper { sigma 1 title "+1sigma" },
+          endupper { sigma 2 title "+2sigma" },
+          endupper { sigma 0.5 title "+0.5sigma" },
+          endupper { percentile 0.95 title "P95" },
+          endupper { percentile 0.5 title "median" }
+}

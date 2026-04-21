@@ -59,10 +59,11 @@ class TaskJuggler
   # The column is uniquely identified by an ID.
   class TableColumnDefinition
 
-    attr_reader :id, :cellText, :tooltip, :hAlign, :cellColor, :fontColor
+    attr_reader :id, :cellText, :tooltip, :hAlign, :cellColor, :fontColor,
+                :pertMemo
     attr_accessor :title, :start, :end, :scale, :listItem, :listType,
                   :width, :content, :column, :timeformat1, :timeformat2,
-                  :expression
+                  :expression, :sigmaFactor
 
     def initialize(id, title)
       # The column ID. It must be unique within the report.
@@ -111,6 +112,15 @@ class TaskJuggler
       @column = nil
       # Optional ArithExpr for computed columns.
       @expression = nil
+      # Optional σ multiplier for probabilistic columns (e.g. endupper).
+      # Set by `sigma` or `percentile` column options. Default applied by
+      # the attribute's query function when nil.
+      @sigmaFactor = nil
+      # Shared memoisation hash for PERT end-stdev propagation across the
+      # rows of a single report. Populated on demand by query functions
+      # that need σ_end; never invalidated (the column's scope is a single
+      # report generation, after which it is discarded).
+      @pertMemo = {}
     end
 
   end

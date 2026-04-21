@@ -1,0 +1,18 @@
+project tz "Timezone" "1.0" 2005-06-05-11:00-+0000 - 2005-06-06-11:00-+0000 {
+  timezone "Pacific/Auckland"
+  scenario plan "Plan Scenario" {
+    active yes
+  }
+}
+
+projectids tz
+
+
+task item "Project" {
+  start 2005-06-06-00:00-+0000
+  scheduled
+}
+supplement task item {
+  priority 500
+  projectid tz
+}

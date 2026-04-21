@@ -1419,6 +1419,143 @@ class TaskJuggler
       query.string = query.scaleLoad(stdev)
     end
 
+    # Return the standard deviation of this task's scheduled end date, in
+    # scoreboard slots. Computed on demand from the effort distribution of
+    # leaf tasks and propagated through the dependency graph along the
+    # critical path (PERT method of moments).
+    #
+    # Algorithm:
+    #
+    # * Leaf:     σ_end = √(σ_start² + σ_duration²)
+    #             σ_duration = σ_effort · duration / effort
+    #             σ_start = max σ_end over dependency predecessors whose
+    #             relevant endpoint coincides with this task's start
+    # * Container: σ_end = σ_end of the child whose mean end date equals
+    #             this container's mean end date (critical child). If
+    #             several children tie, take the one with the largest σ.
+    # * Milestone / zero-effort / unscheduled task: σ_end = 0 locally; the
+    #             value still propagates from predecessors.
+    #
+    # The +memo+ hash is shared across a single report-generation request
+    # to make repeated queries on an N-task graph O(N + E) rather than
+    # exponential on diamond topologies. The key is [task_scenario,
+    # :end] or [task_scenario, :start] to memoize both propagation points
+    # independently.
+    #
+    # This method intentionally makes no distributional assumption — it
+    # computes the second moment only. The relation between σ and tail
+    # probability (3σ ≈ P99.7, etc.) holds only if the resulting
+    # distribution is approximately normal; see the `endupper` documentation
+    # for a discussion of when that is warranted.
+    def endStdevSlots(memo = {})
+      key = [self, :end]
+      return memo[key] if memo.key?(key)
+      # Seed with 0 so that cycles (which the scheduler must have already
+      # rejected, but defensively) cannot cause infinite recursion.
+      memo[key] = 0.0
+
+      sigma =
+        if @property.container?
+          # σ of the container's end = σ_end of the critical child (the
+          # child whose mean end date equals the container's end). Ties
+          # broken by max σ — consistent with the critical-predecessor rule
+          # used for leaf tasks.
+          best = 0.0
+          @property.kids.each do |child|
+            ts = child.data[@scenarioIdx]
+            next if ts.nil? || ts.instance_variable_get(:@end).nil?
+            next unless ts.instance_variable_get(:@end) == @end
+            child_sigma = ts.endStdevSlots(memo)
+            best = child_sigma if child_sigma > best
+          end
+          best
+        else
+          sigma_start = startStdevSlots(memo)
+          sigma_dur   = durationStdevSlots
+          Math.sqrt(sigma_start ** 2 + sigma_dur ** 2)
+        end
+
+      memo[key] = sigma
+      sigma
+    end
+
+    # Return the standard deviation of this task's scheduled start date,
+    # in scoreboard slots. Defined as σ_end (or σ_start, per +onEnd+ flag)
+    # of the critical predecessor: the task whose relevant endpoint
+    # determines — in the scheduled mean — this task's start.
+    #
+    # Predecessor sources considered:
+    #
+    # * Explicit dependencies from @startpreds (end-to-start or start-to-
+    #   start, per the +onEnd+ flag);
+    # * Resource-induced predecessors: for each resource this task is
+    #   allocated to, the task that held the resource in the booked slot
+    #   immediately preceding this task's start. In resource-levelled
+    #   projects this is often the dominant constraint, so ignoring it
+    #   systematically under-estimates σ_end of downstream tasks.
+    #
+    # Selection rule: among all candidate predecessors, pick the one
+    # whose relevant event (end or start) falls at the LATEST scoreboard
+    # slot — i.e. the predecessor the scheduler waited for longest. Exact
+    # slot equality with task.start is NOT required because TJ3 may shift
+    # the start forward across non-working slots (nights, weekends) after
+    # the predecessor released.
+    #
+    # If no candidate precedes this task's start (e.g. a fixed `start`
+    # date overrides every predecessor), σ_start = 0.
+    def startStdevSlots(memo = {})
+      key = [self, :start]
+      return memo[key] if memo.key?(key)
+      memo[key] = 0.0
+
+      start_idx = startSlotIdx
+      sigma = 0.0
+      if start_idx
+        best_idx, best_sigma = nil, 0.0
+        eachCriticalPredecessorCandidate(start_idx) do |ts, on_end, idx|
+          cand_sigma = on_end ? ts.endStdevSlots(memo) : ts.startStdevSlots(memo)
+          if best_idx.nil? || idx > best_idx ||
+             (idx == best_idx && cand_sigma > best_sigma)
+            best_idx, best_sigma = idx, cand_sigma
+          end
+        end
+        sigma = best_sigma
+      end
+
+      memo[key] = sigma
+      sigma
+    end
+
+    # Return the standard deviation of this task's own duration, in
+    # scoreboard slots, based on the effort distribution and the empirical
+    # allocation rate derived from the scheduled start/end:
+    #
+    #   σ_duration = σ_effort · duration / effort
+    #
+    # Since duration = effort / rate, this is equivalent to
+    # σ_effort / rate. Using duration/effort sidesteps the need to
+    # reconstruct per-resource allocation rates — the scheduler has
+    # already resolved them into the scheduled interval.
+    #
+    # Returns 0 for milestones, zero-effort tasks, tasks that have not
+    # been scheduled, and container tasks (for which duration σ is not
+    # directly defined; container σ_end comes from the critical child).
+    def durationStdevSlots
+      return 0.0 if @property.container? || @milestone
+      sigma_effort = @stdev
+      return 0.0 if sigma_effort.nil? || sigma_effort == 0.0
+
+      start_idx = startSlotIdx
+      end_idx   = endSlotIdx
+      return 0.0 if start_idx.nil? || end_idx.nil? || end_idx <= start_idx
+      duration_slots = end_idx - start_idx
+
+      effort_slots = @effort.respond_to?(:to_f) ? @effort.to_f : (@effort || 0.0)
+      return 0.0 if effort_slots <= 0.0
+
+      sigma_effort.to_f * duration_slots.to_f / effort_slots
+    end
+
     def query_followers(query)
       list = []
 
@@ -1481,6 +1618,42 @@ class TaskJuggler
 
     def query_maxend(query)
       queryDateLimit(query, @maxend)
+    end
+
+    # Report the probabilistic upper-bound end date of this task, offset
+    # from the scheduled (mean) end by k · σ, where
+    #
+    # * σ is the standard deviation of the end date in scoreboard slots,
+    #   propagated by PERT method-of-moments through the task graph (see
+    #   endStdevSlots);
+    # * k is the column option `sigma` (or `percentile` converted via the
+    #   inverse standard-normal CDF), defaulting to 3.
+    #
+    # The date-shift uses the project scoreboard so that k · σ working
+    # slots are advanced across non-working time (nights, weekends, leaves)
+    # the same way the scheduler does, yielding a valid wall-clock date.
+    def query_endupper(query)
+      unless @end
+        queryDateLimit(query, nil)
+        return
+      end
+
+      k = (query.columnDef && query.columnDef.sigmaFactor) || 3.0
+      memo = query.columnDef ? query.columnDef.pertMemo : {}
+      sigma_slots = endStdevSlots(memo)
+
+      offset = (k * sigma_slots).round
+      if offset == 0
+        queryDateLimit(query, @end)
+        return
+      end
+
+      end_idx = @project.dateToIdx(@end)
+      target_idx = end_idx + offset
+      target_idx = 0 if target_idx < 0
+      max_idx = @project.scoreboardSize - 1
+      target_idx = max_idx if target_idx > max_idx
+      queryDateLimit(query, @project.idxToDate(target_idx))
     end
 
     def query_maxstart(query)
@@ -1871,6 +2044,60 @@ class TaskJuggler
     end
 
   private
+
+    # Return the scheduled start of this task as a scoreboard slot index,
+    # or nil if the task has no start date yet.
+    def startSlotIdx
+      @start ? @project.dateToIdx(@start) : nil
+    end
+
+    # Return the scheduled end of this task as a scoreboard slot index, or
+    # nil if the task has no end date yet.
+    def endSlotIdx
+      @end ? @project.dateToIdx(@end) : nil
+    end
+
+    # Yield [TaskScenario, onEnd, pred_event_slot_idx] triples for every
+    # candidate predecessor whose relevant event falls at or before
+    # +start_idx+. Sources merged:
+    #
+    # * Dependency predecessors from @startpreds (onEnd per the dep flag).
+    # * Resource-induced predecessors: the task holding each allocated
+    #   resource in the slot immediately before start_idx (onEnd = true —
+    #   it is the predecessor's END that freed the resource).
+    #
+    # Private helper for startStdevSlots.
+    def eachCriticalPredecessorCandidate(start_idx)
+      return enum_for(:eachCriticalPredecessorCandidate, start_idx) unless block_given?
+
+      @startpreds.each do |pred_task, on_end|
+        ts = pred_task.data[@scenarioIdx]
+        next if ts.nil?
+        idx = pred_event_slot_idx(ts, on_end)
+        next if idx.nil? || idx > start_idx
+        yield ts, on_end, idx
+      end
+
+      @assignedresources.each do |resource|
+        rs = resource.data[@scenarioIdx]
+        next if rs.nil?
+        pred_task = rs.predecessor_on_slot(start_idx, @property)
+        next if pred_task.nil?
+        pred_ts = pred_task.data[@scenarioIdx]
+        next if pred_ts.nil?
+        idx = pred_event_slot_idx(pred_ts, true)
+        next if idx.nil? || idx > start_idx
+        yield pred_ts, true, idx
+      end
+    end
+
+    # Return the scoreboard slot index of the event on +ts+ that is tied
+    # to this task's start by the dependency: the predecessor's scheduled
+    # end if +on_end+ is true, otherwise its scheduled start.
+    def pred_event_slot_idx(ts, on_end)
+      date = on_end ? ts.instance_variable_get(:@end) : ts.instance_variable_get(:@start)
+      date ? @project.dateToIdx(date) : nil
+    end
 
     def scheduleSlot
       # Tasks must always be scheduled in a single contigous fashion.

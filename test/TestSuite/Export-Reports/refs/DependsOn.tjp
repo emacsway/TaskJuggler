@@ -1,0 +1,121 @@
+project prj "DependsOn Function Demo" "1.0" 2024-01-01-00:00-+0000 - 2024-12-31-00:00-+0000 {
+  timezone "UTC"
+  scenario plan "Plan" {
+    scenario fact "Fact" {
+      active yes
+    }
+    active yes
+  }
+}
+
+projectids prj
+
+resource dev1 "Developer 1"
+resource dev2 "Developer 2"
+
+task deliveries "Deliveries" {
+  task sprint1 "Sprint 1" {
+    start 2024-02-01-00:00-+0000
+    scheduled
+  }
+  task sprint2 "Sprint 2" {
+    start 2024-03-01-00:00-+0000
+    scheduled
+  }
+}
+task t1 "Task 1" {
+  fact:depends deliveries.sprint1
+  start 2024-01-01-09:00-+0000
+  end 2024-01-05-17:00-+0000
+  scheduling asap
+  scheduled
+  fact:start 2024-02-01-09:00-+0000
+  fact:end 2024-02-07-17:00-+0000
+  fact:scheduling asap
+}
+task t2 "Task 2" {
+  fact:depends deliveries.sprint1
+  start 2024-01-01-09:00-+0000
+  end 2024-01-03-17:00-+0000
+  scheduling asap
+  scheduled
+  fact:start 2024-02-01-09:00-+0000
+  fact:end 2024-02-05-17:00-+0000
+  fact:scheduling asap
+}
+task t3 "Task 3" {
+  fact:depends deliveries.sprint2
+  start 2024-01-08-09:00-+0000
+  end 2024-01-11-17:00-+0000
+  scheduling asap
+  scheduled
+  fact:start 2024-03-01-09:00-+0000
+  fact:end 2024-03-06-17:00-+0000
+  fact:scheduling asap
+}
+supplement task deliveries {
+  priority 500
+  projectid prj
+}
+supplement task deliveries.sprint1 {
+  priority 500
+  projectid prj
+}
+supplement task deliveries.sprint2 {
+  priority 500
+  projectid prj
+}
+supplement task t1 {
+  booking dev1 2024-01-01-09:00-+0000 + 8.0h,
+          2024-01-02-09:00-+0000 + 8.0h,
+          2024-01-03-09:00-+0000 + 8.0h,
+          2024-01-04-09:00-+0000 + 8.0h,
+          2024-01-05-09:00-+0000 + 8.0h { overtime 2 }
+  fact:booking dev1 2024-02-01-09:00-+0000 + 8.0h,
+               2024-02-02-09:00-+0000 + 8.0h,
+               2024-02-05-09:00-+0000 + 8.0h,
+               2024-02-06-09:00-+0000 + 8.0h,
+               2024-02-07-09:00-+0000 + 8.0h { overtime 2 }
+  priority 500
+  projectid prj
+}
+supplement task t2 {
+  booking dev2 2024-01-01-09:00-+0000 + 8.0h,
+          2024-01-02-09:00-+0000 + 8.0h,
+          2024-01-03-09:00-+0000 + 8.0h { overtime 2 }
+  fact:booking dev2 2024-02-01-09:00-+0000 + 8.0h,
+               2024-02-02-09:00-+0000 + 8.0h,
+               2024-02-05-09:00-+0000 + 8.0h { overtime 2 }
+  priority 500
+  projectid prj
+}
+supplement task t3 {
+  booking dev1 2024-01-08-09:00-+0000 + 8.0h,
+          2024-01-09-09:00-+0000 + 8.0h,
+          2024-01-10-09:00-+0000 + 8.0h,
+          2024-01-11-09:00-+0000 + 8.0h { overtime 2 }
+  fact:booking dev1 2024-03-01-09:00-+0000 + 8.0h,
+               2024-03-04-09:00-+0000 + 8.0h,
+               2024-03-05-09:00-+0000 + 8.0h,
+               2024-03-06-09:00-+0000 + 8.0h { overtime 2 }
+  priority 500
+  projectid prj
+}
+supplement resource dev1 {
+  workinghours sun off
+               workinghours mon 9:00 - 17:00
+               workinghours tue 9:00 - 17:00
+               workinghours wed 9:00 - 17:00
+               workinghours thu 9:00 - 17:00
+               workinghours fri 9:00 - 17:00
+               workinghours sat off
+}
+supplement resource dev2 {
+  workinghours sun off
+               workinghours mon 9:00 - 17:00
+               workinghours tue 9:00 - 17:00
+               workinghours wed 9:00 - 17:00
+               workinghours thu 9:00 - 17:00
+               workinghours fri 9:00 - 17:00
+               workinghours sat off
+}

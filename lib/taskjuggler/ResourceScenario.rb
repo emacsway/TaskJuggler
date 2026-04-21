@@ -183,6 +183,50 @@ class TaskJuggler
       sb
     end
 
+    # Return the Task that held this resource in the most recent booked slot
+    # preceding _sbIdx_, or nil if no such task exists. Used by PERT
+    # end-date variance propagation to identify tasks whose finish time
+    # determined, via resource contention (not an explicit dependency),
+    # the start of another task.
+    #
+    # Walk-back semantics:
+    # * A Task slot other than +excludeTask+ is returned immediately as the
+    #   predecessor.
+    # * A Task slot equal to +excludeTask+ is skipped (the task may be
+    #   fragmented by leveling; its own earlier segments are not its own
+    #   predecessor).
+    # * A non-working slot (bit 1 set — off-shift; or bits 2-5 set — leave)
+    #   is skipped: wall-clock gaps such as weekends and holidays do not
+    #   represent voluntary resource idleness, so the walk continues.
+    # * A +nil+ slot represents an available working-time slot that was not
+    #   booked — the resource was idle here, so the current task did not
+    #   have to wait for any predecessor to release it. The walk stops and
+    #   no predecessor is reported.
+    # * Reaching the beginning of the scoreboard without finding a Task
+    #   also returns nil.
+    def predecessor_on_slot(sbIdx, excludeTask = nil)
+      return nil if @scoreboard.nil? || sbIdx <= 0
+      idx = sbIdx - 1
+      while idx >= 0
+        slot = @scoreboard[idx]
+        case slot
+        when Task
+          return slot unless slot.equal?(excludeTask)
+          idx -= 1
+        when nil
+          # Available working-time slot that was not booked: the resource
+          # was genuinely idle, no tight predecessor.
+          return nil
+        when Integer
+          # Non-working time (off-shift or leave): continue searching.
+          idx -= 1
+        else
+          return nil
+        end
+      end
+      nil
+    end
+
     # Book the slot indicated by the scoreboard index +sbIdx+ for Task +task+.
     # If +force+ is true, overwrite the existing booking for this slot. The
     # method returns true if the slot was available.

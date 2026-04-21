@@ -40,7 +40,7 @@ class TaskJuggler
                loadUnit numberFormat currencyFormat timeFormat
                listItem listType hideJournalEntry
                journalMode journalAttributes sortJournalEntries
-               costAccount revenueAccount selfContained )
+               costAccount revenueAccount selfContained columnDef )
     @@ps.each do |p|
       attr_accessor p.to_sym
     end

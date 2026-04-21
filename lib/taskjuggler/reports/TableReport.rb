@@ -640,6 +640,7 @@ class TaskJuggler
       # settings.
       query = query.dup
       query.attributeId = columnDef.id
+      query.columnDef = columnDef
       query.start = @columns[columnDef].start
       query.end = @columns[columnDef].end
       query.listType = columnDef.listType

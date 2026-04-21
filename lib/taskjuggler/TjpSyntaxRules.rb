@@ -851,6 +851,77 @@ Specifies the scale that should be used for a chart column. This value is ignore
 EOT
        )
 
+    pattern(%w( _percentile !number ), lambda {
+      p = @val[1].to_f
+      if p < 0.0 || p > 1.0
+        error('bad_percentile',
+              "percentile must be in [0, 1], got #{p}",
+              @sourceFileInfo[0])
+      end
+      if @column.sigmaFactor
+        error('sigma_percentile_conflict',
+              "A column may use either 'sigma' or 'percentile', not both.",
+              @sourceFileInfo[0])
+      end
+      require 'taskjuggler/NormalInverse'
+      @column.sigmaFactor = NormalInverse.ppf(p)
+    })
+    doc('percentile.column', <<'EOT'
+Specifies a probability ''p'' in the interval [0, 1] that controls the value
+of a probabilistic column such as [[endupper]]. The probability is converted
+to a σ-multiplier ''k'' via the inverse standard-normal CDF, ''k'' =
+Φ⁻¹(''p''), and the column then renders the value offset from the mean by
+''k'' standard deviations.
+
+Typical values: ''percentile 0.5'' gives the mean (''k'' = 0), ''percentile
+0.8413'' ≈ 1σ, ''percentile 0.9772'' ≈ 2σ, ''percentile 0.9987'' ≈ 3σ,
+''percentile 0.95'' ≈ 1.645σ (one-sided P95), ''percentile 0.975'' ≈ 1.96σ
+(two-sided 95%).
+
+The mapping assumes the underlying distribution is approximately normal.
+This approximation is reasonable when the critical path contains many
+sequential tasks (central limit theorem) but degrades for short chains or
+near-critical merge points. See [[endupper]] for a discussion of the PERT
+assumptions and their limits.
+
+A column may not use both ''percentile'' and ''sigma''.
+EOT
+       )
+    arg(1, 'p', 'A probability in [0, 1].')
+
+    pattern(%w( _sigma !number ), lambda {
+      if @column.sigmaFactor
+        error('sigma_percentile_conflict',
+              "A column may use either 'sigma' or 'percentile', not both.",
+              @sourceFileInfo[0])
+      end
+      @column.sigmaFactor = @val[1].to_f
+    })
+    doc('sigma.column', <<'EOT'
+Specifies a σ-multiplier ''k'' ≥ 0 (standard deviations above the mean) for
+a probabilistic column such as [[endupper]]. The column renders the value
+offset from the mean by ''k'' · σ, where σ is the column's underlying
+standard deviation (e.g. σ of the end date for [[endupper]]).
+
+Typical values:
+* ''sigma 0'' — the mean (same as ''end'' for [[endupper]])
+* ''sigma 1'' — one standard deviation above the mean (~P84 under normality)
+* ''sigma 2'' — ~P97.7 under normality
+* ''sigma 3'' — ~P99.7 under normality
+
+Unlike [[percentile.column|percentile]], ''sigma'' makes no distributional
+assumption: it is simply a shift in units of σ. The probability
+interpretation attached to specific values holds only under normality.
+
+To obtain a date below the mean (optimistic bound), use
+[[percentile.column|percentile]] with ''p'' < 0.5 — internally a negative
+σ-multiplier is produced.
+
+A column may not use both ''sigma'' and ''percentile''.
+EOT
+       )
+    arg(1, 'k', 'A non-negative σ-multiplier.')
+
     pattern(%w( _start !date ), lambda {
       @column.start = @val[1]
     })
@@ -4035,6 +4106,74 @@ EOT
 
     singlePattern('_end')
     descr('The end date of a task')
+
+    singlePattern('_endupper')
+    descr(<<'EOT'
+A probabilistic upper bound on the end date of a task, shifted from the
+scheduled (mean) end by ''k'' · σ, where
+
+* ''k'' is the σ-multiplier supplied via the column options
+  [[sigma.column|sigma]] or [[percentile.column|percentile]] (default
+  ''k'' = 3);
+* σ is the standard deviation of the end date, computed on demand by
+  propagating task-level effort uncertainty through the task network.
+
+== Algorithm (PERT method of moments) ==
+
+For a leaf task ''t'':
+
+ σ_dur(t) = [[stdev|σ_effort]](t) · duration(t) / effort(t)
+ σ_start(t) = σ_end(π(t)) where π(t) is the critical predecessor
+ σ_end(t) = √(σ_start(t)² + σ_dur(t)²)
+
+Candidates for the critical predecessor π(t) are taken from both
+explicit [[depends]]/[[precedes]] relationships and from resource
+contention — i.e. the task that held an allocated resource in the slot
+immediately before ''t'' started, even without an explicit dependency.
+Among candidates, the one whose relevant endpoint falls at the latest
+scoreboard slot ≤ ''t''.start is chosen.
+
+For a container ''c'':
+
+ σ_end(c) = σ_end of the child whose mean end date equals c.end
+
+The date shift is applied on the project scoreboard: ''k'' · σ is rounded
+to whole working slots and added to the scheduled end index via
+[[idxToDate|idxToDate]], so the resulting date skips nights, weekends,
+and leaves — consistent with how the scheduler advances time.
+
+== When the estimate is reliable ==
+
+σ is a second-moment estimate computed without any distributional
+assumption. The probabilistic interpretation of ''k'' (''k'' = 3 ≈ P99.7,
+etc.) attaches only under approximate normality of the end-date
+distribution. This is reasonable when:
+
+* the critical path contains many sequential tasks (central limit
+  theorem), and
+* the critical path is well-separated from runners-up (so merging
+  does not reshape the distribution).
+
+== Known limitations ==
+
+* '''Near-critical merges.''' When two or more paths to a task have
+  nearly-equal mean completion times, taking σ from just one branch
+  misrepresents σ of their maximum. For equal σ on equal-mean
+  branches the estimate is conservative (overstates σ ≈ 20%); for
+  asymmetric branches (high-σ runner-up below the mean-critical path)
+  it understates. Clark (1961) gives the closed-form correction — not
+  implemented.
+* '''Critical-path drift.''' The selected critical path is the mean-
+  dominant one. Under sampling, which path is critical varies.
+* '''Heavy-tailed effort distributions.''' The ''k''→probability mapping
+  uses the normal CDF; for log-normal or Pareto efforts the tail is
+  heavier than it reports.
+
+For high-stakes forecasts, cross-check ''endupper'' against a Monte
+Carlo simulation (see the Monte Carlo reporting tools) on the same
+project.
+EOT
+          )
 
     singlePattern('_flags')
     descr('List of attached flags')

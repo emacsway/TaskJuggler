@@ -1,0 +1,66 @@
+project prj "List attributes" "1.0" 2014-04-06-00:00-+0000 - 2014-05-06-10:00-+0000 {
+  timezone "UTC"
+  scenario s1 "S1" {
+    scenario s2 "S2" {
+      active yes
+    }
+    active yes
+  }
+}
+
+flags f1, f2, f3
+
+projectids prj
+
+
+task _Task_1 "T1" {
+  start 2014-04-06-00:00-+0000
+  scheduled
+}
+task _Task_2 "T2" {
+  task _Task_3 "T3" {
+    start 2014-04-06-00:00-+0000
+    scheduled
+  }
+}
+task _Task_4 "T4" {
+  start 2014-04-06-00:00-+0000
+  scheduled
+}
+task _Task_5 "T5" {
+  task _Task_6 "T6" {
+    start 2014-04-06-00:00-+0000
+    scheduled
+  }
+}
+supplement task _Task_1 {
+  flags f1, f2, f3
+  priority 500
+  projectid prj
+}
+supplement task _Task_2 {
+  flags f1
+  priority 500
+  projectid prj
+}
+supplement task _Task_2._Task_3 {
+  flags f1, f2
+  priority 500
+  projectid prj
+}
+supplement task _Task_4 {
+  flags f1
+  s2:flags f1, f2
+  priority 500
+  projectid prj
+}
+supplement task _Task_5 {
+  flags f1
+  priority 500
+  projectid prj
+}
+supplement task _Task_5._Task_6 {
+  flags f2
+  priority 500
+  projectid prj
+}

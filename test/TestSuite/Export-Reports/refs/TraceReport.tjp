@@ -1,0 +1,34 @@
+project prj "Trace Reports" "1.0" 2012-01-14-00:00-+0000 - 2012-03-14-20:00-+0000 {
+  timezone "UTC"
+  scenario plan "Plan Scenario" {
+    active yes
+  }
+}
+
+projectids prj
+
+
+task _Task_1 "Foo" {
+  start 2012-01-14-00:00-+0000
+  scheduled
+}
+task _Task_2 "Bar" {
+  start 2012-01-14-00:00-+0000
+  scheduled
+}
+task _Task_3 "FooBar" {
+  start 2012-01-14-00:00-+0000
+  scheduled
+}
+supplement task _Task_1 {
+  priority 500
+  projectid prj
+}
+supplement task _Task_2 {
+  priority 500
+  projectid prj
+}
+supplement task _Task_3 {
+  priority 500
+  projectid prj
+}
