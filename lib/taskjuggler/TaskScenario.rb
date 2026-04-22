@@ -1537,28 +1537,29 @@ class TaskJuggler
     end
 
     # Return the standard deviation of this task's own REMAINING
-    # duration, in scoreboard slots. Only work that is still to be
-    # performed carries uncertainty — work already done has resolved
-    # its variance and must not be folded back into the end-date
-    # forecast.
+    # duration, in WORKING slots (slots where at least one of the
+    # task's assigned resources is on-shift and available).
     #
-    # "Done" is determined from two independent signals:
+    # Working slots — not wall-clock slots — is the dimensionally-
+    # correct measure: σ_effort is in effective working time, so
+    # σ_duration must be too. Wall-clock counting would inflate σ by
+    # a factor of (calendar hours / working hours), amplifying further
+    # for holiday blocks (Russian New Year, May Day) that contribute
+    # zero effective work but many wall-clock hours.
     #
-    # * Temporal progress through the scheduled interval
-    #   [start, end] relative to the project's "now" clock — same as
-    #   reflected in `effortleft` via getEffectiveWork(now, end).
-    # * The explicit `complete` attribute (0–100%), which the user can
-    #   set on any task regardless of schedule. A future-scheduled task
-    #   with `complete 50` is genuinely half done; only half of σ
-    #   remains.
+    # Formula:
     #
-    # Each signal produces a fraction-remaining in [0, 1]; the
-    # tighter (smaller) of the two wins — more progress, less
-    # uncertainty. The full duration σ is scaled by this fraction:
+    #   σ_duration = σ_effort · W_working / effort
     #
-    #   σ_duration_full      = σ_effort_total · duration / effort
-    #   remaining_fraction   = min(time_remaining, 1 − complete/100)
-    #   σ_duration_remaining = σ_duration_full · remaining_fraction
+    # where W_working is the count of scoreboard slots in
+    # [start_idx, end_idx) on which at least one of the task's
+    # assigned resources is working. For single-resource tasks this
+    # is that resource's on-shift calendar; for multi-resource tasks
+    # the union reflects that the task progresses whenever any
+    # assigned resource is available.
+    #
+    # Progress handling ("done" fraction) is unchanged — the full
+    # σ is scaled by min(time_remaining, 1 − complete/100).
     #
     # Returns 0 for milestones, zero-effort tasks, tasks that have not
     # been scheduled, and container tasks (for which duration σ is
@@ -1578,8 +1579,10 @@ class TaskJuggler
       remaining_fraction = remainingFractionFromProgress(start_idx, end_idx)
       return 0.0 if remaining_fraction <= 0.0
 
-      duration_slots = end_idx - start_idx
-      sigma_full = @stdev.to_f * duration_slots.to_f / effort_slots
+      working_slots = taskWorkingSlotsInInterval(start_idx, end_idx)
+      return 0.0 if working_slots <= 0
+
+      sigma_full = @stdev.to_f * working_slots.to_f / effort_slots
       sigma_full * remaining_fraction
     end
 
@@ -1650,15 +1653,18 @@ class TaskJuggler
     # Report the probabilistic upper-bound end date of this task, offset
     # from the scheduled (mean) end by k · σ, where
     #
-    # * σ is the standard deviation of the end date in scoreboard slots,
-    #   propagated by PERT method-of-moments through the task graph (see
-    #   endStdevSlots);
-    # * k is the column option `sigma` (or `percentile` converted via the
-    #   inverse standard-normal CDF), defaulting to 3.
+    # * σ is the standard deviation of the end date in WORKING slots
+    #   (slots where the task's assigned resources are on-shift),
+    #   propagated by PERT method-of-moments with Clark-1961 merging —
+    #   see endStdevSlots;
+    # * k is the column option `sigma` (or `percentile` converted via
+    #   the inverse standard-normal CDF), defaulting to 3.
     #
-    # The date-shift uses the project scoreboard so that k · σ working
-    # slots are advanced across non-working time (nights, weekends, leaves)
-    # the same way the scheduler does, yielding a valid wall-clock date.
+    # The date shift walks the project scoreboard forward from the
+    # scheduled end, counting only working slots and skipping nights,
+    # weekends, holidays, off-shift periods and leaves. The result is
+    # the calendar date on which the task would finish if k · σ
+    # additional working slots of effort were actually consumed.
     def query_endupper(query)
       unless @end
         queryDateLimit(query, nil)
@@ -1675,12 +1681,20 @@ class TaskJuggler
         return
       end
 
+      queryDateLimit(query, endupperDate(k, memo))
+    end
+
+    # Return the endupper date for this task for a given σ-multiplier k,
+    # or nil if the task has no scheduled end. Consolidates the logic
+    # used both by query_endupper and by the Gantt whisker rendering.
+    def endupperDate(k, memo = {})
+      return nil unless @end
+      sigma_slots = endStdevSlots(memo)
+      offset = (k * sigma_slots).round
+      return @end if offset == 0
       end_idx = @project.dateToIdx(@end)
-      target_idx = end_idx + offset
-      target_idx = 0 if target_idx < 0
-      max_idx = @project.scoreboardSize - 1
-      target_idx = max_idx if target_idx > max_idx
-      queryDateLimit(query, @project.idxToDate(target_idx))
+      target_idx = endupperTargetIdx(end_idx, offset)
+      @project.idxToDate(target_idx)
     end
 
     def query_maxstart(query)
@@ -2124,6 +2138,84 @@ class TaskJuggler
     def pred_event_slot_idx(ts, on_end)
       date = on_end ? ts.instance_variable_get(:@end) : ts.instance_variable_get(:@start)
       date ? @project.dateToIdx(date) : nil
+    end
+
+    # Return the number of scoreboard slots in [start_idx, end_idx) that
+    # are "working" for this task — defined as slots where at least one
+    # of the task's assigned resources is in a working state (booked or
+    # on-shift-available). Excludes nights, weekends, off-shift periods,
+    # leaves, and holidays for the resource calendar.
+    #
+    # Used by durationStdevSlots to scale σ_effort to σ_duration without
+    # the wall-clock calendar inflation that would otherwise come from
+    # counting non-working hours.
+    def taskWorkingSlotsInInterval(start_idx, end_idx)
+      return 0 if end_idx <= start_idx
+      resources = @assignedresources
+      # A task without assigned resources has no meaningful work calendar;
+      # fall back to the full wall-clock interval.
+      return end_idx - start_idx if resources.empty?
+
+      resource_scenarios = resources.map { |r| r.data[@scenarioIdx] }.compact
+      return end_idx - start_idx if resource_scenarios.empty?
+
+      count = 0
+      idx = start_idx
+      while idx < end_idx
+        if resource_scenarios.any? { |rs| rs.working?(idx) }
+          count += 1
+        end
+        idx += 1
+      end
+      count
+    end
+
+    # Advance by +offset+ working slots from +from_idx+ and clamp to the
+    # scoreboard bounds. Used by query_endupper to map k · σ (in
+    # working-slot units) to a valid calendar date.
+    def endupperTargetIdx(from_idx, offset)
+      target = advanceWorkingSlots(from_idx, offset)
+      return 0 if target < 0
+      max_idx = @project.scoreboardSize - 1
+      target > max_idx ? max_idx : target
+    end
+
+    # Walk the task's working calendar forward from +from_idx+ and return
+    # the slot index reached after advancing +n+ working slots (where
+    # "working" is the union over the task's resources' calendars).
+    # Non-working slots are skipped without consuming from +n+. If +n+
+    # is zero or negative, +from_idx+ is returned unchanged. Clamps to
+    # scoreboardSize - 1 at the upper bound.
+    def advanceWorkingSlots(from_idx, n)
+      return from_idx if n == 0
+      resources = @assignedresources
+      resource_scenarios = resources.map { |r| r.data[@scenarioIdx] }.compact
+      max_idx = @project.scoreboardSize - 1
+
+      if n < 0
+        # Walk backward for negative offsets (percentile < 0.5).
+        remaining = -n
+        idx = from_idx
+        while remaining > 0 && idx > 0
+          idx -= 1
+          if resource_scenarios.empty? ||
+             resource_scenarios.any? { |rs| rs.working?(idx) }
+            remaining -= 1
+          end
+        end
+        return idx
+      end
+
+      remaining = n
+      idx = from_idx
+      while remaining > 0 && idx < max_idx
+        idx += 1
+        if resource_scenarios.empty? ||
+           resource_scenarios.any? { |rs| rs.working?(idx) }
+          remaining -= 1
+        end
+      end
+      idx
     end
 
     # Return the fraction of this task's effort that remains uncertain,

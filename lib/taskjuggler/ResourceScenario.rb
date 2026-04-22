@@ -176,6 +176,16 @@ class TaskJuggler
       @scoreboard[sbIdx].is_a?(Task)
     end
 
+    # Return true if +sbIdx+ is a "working" slot for this resource — the
+    # resource is either already booked for some task (Task), or available
+    # working-time (nil). Returns false for off-shift, leave, and
+    # scoreboard-uninitialised cases (non-working time).
+    def working?(sbIdx)
+      return false if @scoreboard.nil?
+      slot = @scoreboard[sbIdx]
+      slot.is_a?(Task) || slot.nil?
+    end
+
     # Return the Task that this resource is booked for at the time specified
     # by _sbIdx_. If not booked to a task, nil is returned.
     def bookedTask(sbIdx)

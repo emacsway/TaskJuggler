@@ -354,19 +354,9 @@ class TaskJuggler
       ts = property.data[@query.scenarioIdx]
       return nil if ts.nil?
 
-      sigma_slots = ts.endStdevSlots(columnDef.pertMemo)
-      return nil if sigma_slots <= 0.0
-
-      offset = (columnDef.sigmaFactor * sigma_slots).round
-      return nil if offset == 0
-
-      project = @query.project
-      end_idx = project.dateToIdx(taskEnd)
-      target_idx = end_idx + offset
-      target_idx = 0 if target_idx < 0
-      max_idx = project.scoreboardSize - 1
-      target_idx = max_idx if target_idx > max_idx
-      @chart.dateToX(project.idxToDate(target_idx))
+      target_date = ts.endupperDate(columnDef.sigmaFactor, columnDef.pertMemo)
+      return nil if target_date.nil? || target_date == taskEnd
+      @chart.dateToX(target_date)
     end
 
     # Generate the data structures that mark the time-off periods of a task or

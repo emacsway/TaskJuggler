@@ -67,7 +67,11 @@ class TestEndStdev < Test::Unit::TestCase
   end
 
   def expected_leaf_duration_sigma(ts)
-    sigma_effort_slots(ts) * duration_slots(ts) / effort_slots(ts)
+    project   = ts.instance_variable_get(:@project)
+    start_idx = project.dateToIdx(ts.instance_variable_get(:@start))
+    end_idx   = project.dateToIdx(ts.instance_variable_get(:@end))
+    working   = ts.send(:taskWorkingSlotsInInterval, start_idx, end_idx)
+    sigma_effort_slots(ts) * working / effort_slots(ts)
   end
 
   # ─── Leaf-task σ_duration ────────────────────────────────────

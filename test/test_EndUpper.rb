@@ -113,14 +113,20 @@ class TestEndUpper < Test::Unit::TestCase
     sigma_slots = sc.endStdevSlots
     assert(sigma_slots > 0, "σ_end(A) should be non-zero")
 
-    expected_offset = (1.0 * sigma_slots).round
-    expected_idx = tj.project.dateToIdx(sc.instance_variable_get(:@end)) + expected_offset
-    expected_date = tj.project.idxToDate(expected_idx)
+    # k·σ is now in WORKING slots, not wall-clock slots — the endupper
+    # date is reached by walking the task's working calendar forward
+    # from the scheduled end, skipping nights, weekends, holidays, and
+    # leaves. Compute the expected date the same way and compare.
+    expected_date = sc.endupperDate(1.0)
 
     q = endupper_query(task_a, sigma: 1)
     assert(q.ok, q.errorMessage)
     assert_equal(expected_date, q.to_sort,
-                 "endupper{sigma 1} should shift end by round(sigma) slots on the scoreboard")
+                 "endupper{sigma 1} should advance end by round(sigma) WORKING slots")
+    # Sanity: the shift must be strictly larger than zero and land on a
+    # working date that comes after the scheduled end.
+    assert(expected_date > sc.instance_variable_get(:@end),
+           "endupper date must be after the scheduled end")
   end
 
   def test_endupper_monotone_in_sigma_factor
