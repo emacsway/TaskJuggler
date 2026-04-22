@@ -393,6 +393,105 @@ class TestEndStdev < Test::Unit::TestCase
            "σ near task end (#{sigma_near_end}) should be smaller than σ mid-task (#{sigma_mid})")
   end
 
+  def test_future_task_with_complete_attribute_uses_only_remaining_sigma
+    # Task is scheduled to start AFTER `now`, but the user has tracked
+    # progress through the `complete` attribute. The temporal signal
+    # (task is entirely in the future) alone would keep full σ; the
+    # `complete` signal says half is already done. The tighter signal
+    # wins — σ must be halved.
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-01-01
+      }
+      resource r "R"
+      task future "Future" {
+        start 2024-02-01
+        effort 10d
+        stdev 2d
+        complete 50
+        allocate r
+      }
+    TJP
+    sc = ts(tj.project, 'future')
+    full_sigma = expected_leaf_duration_sigma(sc)
+    assert_in_delta(full_sigma * 0.5, sc.endStdevSlots, TOL,
+                    "complete 50 on a future task should halve sigma_end")
+  end
+
+  def test_complete_100_on_future_task_zeroes_sigma
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-01-01
+      }
+      resource r "R"
+      task future "Future" {
+        start 2024-02-01
+        effort 10d
+        stdev 2d
+        complete 100
+        allocate r
+      }
+    TJP
+    sc = ts(tj.project, 'future')
+    assert_in_delta(0.0, sc.endStdevSlots, TOL,
+                    "complete 100 must zero sigma regardless of scheduled position")
+  end
+
+  def test_complete_overrides_time_when_more_progress
+    # now is at 25% through the task, but user reports 80% complete.
+    # The complete signal is tighter (20% remaining vs 75%) and must win.
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-01-08
+      }
+      resource r "R"
+      task t "T" {
+        start 2024-01-01
+        effort 20d
+        stdev 4d
+        complete 80
+        allocate r
+      }
+    TJP
+    sc = ts(tj.project, 't')
+    full_sigma = expected_leaf_duration_sigma(sc)
+    # Expect σ scaled by 0.2 (the tighter signal), not by the ~0.75
+    # time-based fraction remaining.
+    assert_in_delta(full_sigma * 0.2, sc.endStdevSlots, TOL,
+                    "complete 80 should override time-based remaining fraction")
+  end
+
+  def test_time_overrides_complete_when_more_progress
+    # User reports complete=20 but 80% of the time interval has
+    # passed. Time is the tighter signal — use it.
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-01-25
+      }
+      resource r "R"
+      task t "T" {
+        start 2024-01-01
+        effort 20d
+        stdev 4d
+        complete 20
+        allocate r
+      }
+    TJP
+    sc = ts(tj.project, 't')
+    full_sigma = expected_leaf_duration_sigma(sc)
+    project = sc.instance_variable_get(:@project)
+    start_idx = project.dateToIdx(sc.instance_variable_get(:@start))
+    end_idx   = project.dateToIdx(sc.instance_variable_get(:@end))
+    now_idx   = project.dateToIdx(TaskJuggler::TjTime.new('2024-01-25'))
+    time_remaining = (end_idx - now_idx).to_f / (end_idx - start_idx)
+    assert_in_delta(full_sigma * time_remaining, sc.endStdevSlots, TOL,
+                    "time-based progress should win when it is tighter than complete")
+  end
+
   def test_completed_predecessor_contributes_no_sigma_downstream
     # A→B chain where A is already done. B's σ_start must be 0
     # (past is resolved), so B's σ_end is purely its own durationStdev.

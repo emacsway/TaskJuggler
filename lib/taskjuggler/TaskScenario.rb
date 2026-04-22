@@ -1537,26 +1537,28 @@ class TaskJuggler
     end
 
     # Return the standard deviation of this task's own REMAINING
-    # duration, in scoreboard slots. Only the effort still to be
-    # performed (scheduled after the project's "now" time) carries
-    # uncertainty — work already done has resolved its variance and
-    # must not be folded back into the end-date forecast.
+    # duration, in scoreboard slots. Only work that is still to be
+    # performed carries uncertainty — work already done has resolved
+    # its variance and must not be folded back into the end-date
+    # forecast.
     #
-    # Formula (constant allocation rate, σ scaled linearly with the
-    # fraction of effort yet to be booked):
+    # "Done" is determined from two independent signals:
     #
-    #   σ_duration_remaining = σ_effort_remaining · duration_total / effort_total
+    # * Temporal progress through the scheduled interval
+    #   [start, end] relative to the project's "now" clock — same as
+    #   reflected in `effortleft` via getEffectiveWork(now, end).
+    # * The explicit `complete` attribute (0–100%), which the user can
+    #   set on any task regardless of schedule. A future-scheduled task
+    #   with `complete 50` is genuinely half done; only half of σ
+    #   remains.
     #
-    # where σ_effort_remaining is the standard deviation produced by
-    # the same `effortleft` computation reports use —
-    # getEffectiveWork(now, end).stddev — in days. effort_total is
-    # also expressed in days so the ratio is dimensionless, leaving
-    # the result in slots.
+    # Each signal produces a fraction-remaining in [0, 1]; the
+    # tighter (smaller) of the two wins — more progress, less
+    # uncertainty. The full duration σ is scaled by this fraction:
     #
-    # Cases:
-    #   * task fully ahead of now (start ≥ now)    → full σ (no change)
-    #   * task in progress (start < now < end)     → σ · remaining fraction
-    #   * task already finished (end ≤ now)        → 0
+    #   σ_duration_full      = σ_effort_total · duration / effort
+    #   remaining_fraction   = min(time_remaining, 1 − complete/100)
+    #   σ_duration_remaining = σ_duration_full · remaining_fraction
     #
     # Returns 0 for milestones, zero-effort tasks, tasks that have not
     # been scheduled, and container tasks (for which duration σ is
@@ -1570,23 +1572,15 @@ class TaskJuggler
       end_idx   = endSlotIdx
       return 0.0 if start_idx.nil? || end_idx.nil? || end_idx <= start_idx
 
-      now = @project['now']
-      now_idx = now ? @project.dateToIdx(now) : start_idx
-      # Interval of remaining work is [max(start, now), end]; collapse
-      # to zero when now has already passed the task's end.
-      remaining_start_idx = now_idx > start_idx ? now_idx : start_idx
-      return 0.0 if remaining_start_idx >= end_idx
+      effort_slots = @effort.respond_to?(:to_f) ? @effort.to_f : (@effort || 0.0)
+      return 0.0 if effort_slots <= 0.0
 
-      work = getEffectiveWork(remaining_start_idx, end_idx)
-      sigma_effort_remaining_days = work.stddev
-      return 0.0 if sigma_effort_remaining_days <= 0.0
-
-      effort_total_days = @project.convertToDailyLoad(
-        @effort * @project['scheduleGranularity'])
-      return 0.0 if effort_total_days <= 0.0
+      remaining_fraction = remainingFractionFromProgress(start_idx, end_idx)
+      return 0.0 if remaining_fraction <= 0.0
 
       duration_slots = end_idx - start_idx
-      sigma_effort_remaining_days * duration_slots.to_f / effort_total_days
+      sigma_full = @stdev.to_f * duration_slots.to_f / effort_slots
+      sigma_full * remaining_fraction
     end
 
     def query_followers(query)
@@ -2130,6 +2124,35 @@ class TaskJuggler
     def pred_event_slot_idx(ts, on_end)
       date = on_end ? ts.instance_variable_get(:@end) : ts.instance_variable_get(:@start)
       date ? @project.dateToIdx(date) : nil
+    end
+
+    # Return the fraction of this task's effort that remains uncertain,
+    # in [0, 1]. Combines two independent "done" signals: temporal
+    # progress of the project clock through the scheduled interval, and
+    # the explicit `complete` attribute. The tighter (smaller) remaining
+    # fraction of the two wins.
+    def remainingFractionFromProgress(start_idx, end_idx)
+      now = @project['now']
+      time_remaining =
+        if now.nil?
+          1.0
+        else
+          now_idx = @project.dateToIdx(now)
+          if now_idx >= end_idx
+            0.0
+          elsif now_idx <= start_idx
+            1.0
+          else
+            (end_idx - now_idx).to_f / (end_idx - start_idx).to_f
+          end
+        end
+
+      complete_pct = @complete || 0
+      complete_remaining = 1.0 - complete_pct / 100.0
+      complete_remaining = 0.0 if complete_remaining < 0.0
+      complete_remaining = 1.0 if complete_remaining > 1.0
+
+      time_remaining < complete_remaining ? time_remaining : complete_remaining
     end
 
     def scheduleSlot
