@@ -337,6 +337,99 @@ class TestEndStdev < Test::Unit::TestCase
                     "Resource contention and explicit dep should yield the same σ_end(B)")
   end
 
+  # ─── σ of remaining work only ───────────────────────────────
+
+  def test_completed_task_has_zero_sigma
+    # Task ends before `now`: its σ has been resolved (the actual
+    # effort spent is now known). σ_end must be 0, or downstream σ
+    # would accumulate variance from work that no longer carries any.
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-03-01
+      }
+      resource r "R"
+      task a "A" {
+        start 2024-01-01
+        effort 5d
+        stdev 1d
+        allocate r
+      }
+    TJP
+    a = ts(tj.project, 'a')
+    assert_in_delta(0.0, a.endStdevSlots, TOL,
+                    "σ_end of a fully-completed task (end < now) must be 0")
+  end
+
+  def test_in_progress_task_uses_only_remaining_sigma
+    # Task spans `now`: σ must reflect only the remaining portion of
+    # effort, not the total. Compare σ_end at two different `now`
+    # positions — a later now must produce a strictly smaller σ.
+    make_project = lambda do |now_date|
+      tjp = <<~TJP
+        project test "Test" 2024-01-01 - 2024-12-31 {
+          timezone "UTC"
+          now #{now_date}
+        }
+        resource r "R"
+        task a "A" {
+          start 2024-01-01
+          effort 20d
+          stdev 4d
+          allocate r
+        }
+      TJP
+      parse_and_schedule(tjp)
+    end
+
+    sigma_at_start  = ts(make_project.call('2024-01-01').project, 'a').endStdevSlots
+    sigma_mid       = ts(make_project.call('2024-01-15').project, 'a').endStdevSlots
+    sigma_near_end  = ts(make_project.call('2024-01-25').project, 'a').endStdevSlots
+
+    assert(sigma_at_start > 0, "σ should be non-zero before task starts")
+    assert(sigma_mid < sigma_at_start,
+           "σ mid-task (#{sigma_mid}) should be smaller than σ at task start (#{sigma_at_start})")
+    assert(sigma_near_end < sigma_mid,
+           "σ near task end (#{sigma_near_end}) should be smaller than σ mid-task (#{sigma_mid})")
+  end
+
+  def test_completed_predecessor_contributes_no_sigma_downstream
+    # A→B chain where A is already done. B's σ_start must be 0
+    # (past is resolved), so B's σ_end is purely its own durationStdev.
+    tj = parse_and_schedule(<<~TJP)
+      project test "Test" 2024-01-01 - 2024-12-31 {
+        timezone "UTC"
+        now 2024-02-15
+      }
+      resource r1 "R1"
+      resource r2 "R2"
+      task a "A" {
+        start 2024-01-01
+        effort 5d
+        stdev 1d
+        allocate r1
+      }
+      task b "B" {
+        start 2024-02-15
+        effort 5d
+        stdev 1d
+        allocate r2
+        depends a
+      }
+    TJP
+
+    a = ts(tj.project, 'a')
+    b = ts(tj.project, 'b')
+
+    assert_in_delta(0.0, a.endStdevSlots, TOL,
+                    "completed predecessor should have σ_end = 0")
+    # B has not started yet: its σ_dur is the full durationStdev, and
+    # σ_start = σ_end(a) = 0.
+    sigma_b_own = expected_leaf_duration_sigma(b)
+    assert_in_delta(sigma_b_own, b.endStdevSlots, TOL,
+                    "B's σ_end should collapse to its own σ_dur when predecessor is done")
+  end
+
   # ─── Memoization ─────────────────────────────────────────────
 
   def test_memo_is_shared_across_calls

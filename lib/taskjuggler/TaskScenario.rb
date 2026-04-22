@@ -1536,34 +1536,57 @@ class TaskJuggler
       sigma
     end
 
-    # Return the standard deviation of this task's own duration, in
-    # scoreboard slots, based on the effort distribution and the empirical
-    # allocation rate derived from the scheduled start/end:
+    # Return the standard deviation of this task's own REMAINING
+    # duration, in scoreboard slots. Only the effort still to be
+    # performed (scheduled after the project's "now" time) carries
+    # uncertainty — work already done has resolved its variance and
+    # must not be folded back into the end-date forecast.
     #
-    #   σ_duration = σ_effort · duration / effort
+    # Formula (constant allocation rate, σ scaled linearly with the
+    # fraction of effort yet to be booked):
     #
-    # Since duration = effort / rate, this is equivalent to
-    # σ_effort / rate. Using duration/effort sidesteps the need to
-    # reconstruct per-resource allocation rates — the scheduler has
-    # already resolved them into the scheduled interval.
+    #   σ_duration_remaining = σ_effort_remaining · duration_total / effort_total
+    #
+    # where σ_effort_remaining is the standard deviation produced by
+    # the same `effortleft` computation reports use —
+    # getEffectiveWork(now, end).stddev — in days. effort_total is
+    # also expressed in days so the ratio is dimensionless, leaving
+    # the result in slots.
+    #
+    # Cases:
+    #   * task fully ahead of now (start ≥ now)    → full σ (no change)
+    #   * task in progress (start < now < end)     → σ · remaining fraction
+    #   * task already finished (end ≤ now)        → 0
     #
     # Returns 0 for milestones, zero-effort tasks, tasks that have not
-    # been scheduled, and container tasks (for which duration σ is not
-    # directly defined; container σ_end comes from the critical child).
+    # been scheduled, and container tasks (for which duration σ is
+    # not directly defined; container σ_end comes from Clark merge of
+    # children).
     def durationStdevSlots
       return 0.0 if @property.container? || @milestone
-      sigma_effort = @stdev
-      return 0.0 if sigma_effort.nil? || sigma_effort == 0.0
+      return 0.0 if @stdev.nil? || @stdev == 0.0
 
       start_idx = startSlotIdx
       end_idx   = endSlotIdx
       return 0.0 if start_idx.nil? || end_idx.nil? || end_idx <= start_idx
+
+      now = @project['now']
+      now_idx = now ? @project.dateToIdx(now) : start_idx
+      # Interval of remaining work is [max(start, now), end]; collapse
+      # to zero when now has already passed the task's end.
+      remaining_start_idx = now_idx > start_idx ? now_idx : start_idx
+      return 0.0 if remaining_start_idx >= end_idx
+
+      work = getEffectiveWork(remaining_start_idx, end_idx)
+      sigma_effort_remaining_days = work.stddev
+      return 0.0 if sigma_effort_remaining_days <= 0.0
+
+      effort_total_days = @project.convertToDailyLoad(
+        @effort * @project['scheduleGranularity'])
+      return 0.0 if effort_total_days <= 0.0
+
       duration_slots = end_idx - start_idx
-
-      effort_slots = @effort.respond_to?(:to_f) ? @effort.to_f : (@effort || 0.0)
-      return 0.0 if effort_slots <= 0.0
-
-      sigma_effort.to_f * duration_slots.to_f / effort_slots
+      sigma_effort_remaining_days * duration_slots.to_f / effort_total_days
     end
 
     def query_followers(query)
